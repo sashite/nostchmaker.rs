@@ -1,0 +1,43 @@
+# cargo-deny — supply-chain policy enforced in CI.
+# Run locally with:  cargo deny check
+#
+# The crate has a single direct dependency (`nostr`); this policy governs the
+# whole transitive graph: known security advisories, license compatibility with
+# Apache-2.0, and the provenance (registry/source) of every crate.
+
+[advisories]
+# RUSTSEC advisory database. Any matching advisory fails the check. Specific
+# advisory IDs may be accepted here, each with a justification.
+ignore = [
+    # `instant` is unmaintained (not vulnerable): pulled transitively by `nostr`,
+    # with no fix available at our layer. Re-evaluate when upgrading `nostr`.
+    "RUSTSEC-2024-0384",
+]
+yanked = "deny"
+
+[licenses]
+# Allow only permissive licenses compatible with Apache-2.0 redistribution.
+# Anything not listed fails the check. The set is calibrated to the dependency
+# graph; widen it only deliberately, with review.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are surfaced (graph hygiene) but do not fail the build.
+multiple-versions = "warn"
+# Wildcard version requirements (`*`) in our own manifests are forbidden.
+wildcards = "deny"
+
+[sources]
+# crates.io is the only accepted source; unknown registries or git remotes fail.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

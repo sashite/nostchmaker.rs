@@ -1,0 +1,32 @@
+[package]
+name = "nostchmaker"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "Apache-2.0"
+repository = "https://github.com/sashite/nostchmaker.rs"
+description = "Pair Open Challenges into Pairings (kinds 6418/6419) for Nostr: a game-agnostic matchmaking primitive for two-player abstract strategy board games of the chess family."
+readme = "README.md"
+keywords = ["nostr", "nip", "matchmaking", "pairing", "chess"]
+categories = ["games", "api-bindings"]
+exclude = [".github/", "rust-toolchain.toml", "rustfmt.toml", "deny.toml"]
+
+[dependencies]
+# Event types only (Event, EventBuilder, Tag, EventId, PublicKey, ...). No
+# client/transport: this crate is a pure, transport-agnostic primitive.
+nostr = { version = "0.44", features = ["std"], default-features = false }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints.clippy]
+arithmetic_side_effects = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+missing_docs = "deny"
+unsafe_code = "forbid"
