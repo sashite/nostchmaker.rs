@@ -20,26 +20,42 @@
 
 use nostr::PublicKey;
 
-use crate::open_challenge::{Filter, OpenChallenge};
+use crate::open_challenge::{Filter, OpenChallenge, RatingKind};
 
 /// External, relay-derived facts needed to evaluate the `following` and
 /// `rating` filters. A consumer (e.g. a matchmaker service) implements this by
 /// reading NIP-02 contact lists and the suite's rating attestations; the
 /// primitive itself performs no I/O.
+///
+/// Both methods are **anchored at the Pairing's canonical attestation** by
+/// contract: the implementer evaluates the follow relation against the
+/// filterer's contact list as it stood at the anchor, and a rating against the
+/// most recent attestation by the pinned authority with `created_at` at or
+/// before the anchor (kind `6419` §Consent constraints). The primitive does not
+/// see the anchor; threading it is the implementer's responsibility.
 pub trait Facts {
     /// Whether `follower` follows `target`, per `follower`'s NIP-02 contact list.
     fn follows(&self, follower: &PublicKey, target: &PublicKey) -> bool;
 
-    /// Whether the two players' ratings are within `max_delta`, each rated in
-    /// their own resulting `(game, variant)`. The relation is symmetric in the
-    /// players; `max_delta` is the filtering player's bound.
+    /// Whether `a` and `b` are within `max_delta` rating points in the
+    /// `(game, variant)` pool, as rated by the pinned `authority` under the
+    /// pinned `kind`. Both players are rated in the **same** pool — a `rating`
+    /// filter is satisfiable only for a same-variant pairing, which [`evaluate`]
+    /// enforces before calling this. A player with no qualifying attestation
+    /// from `authority` is unrated; the implementer returns `false`
+    /// (fail-closed).
+    // The arguments name the pinned source (authority, kind), the pool
+    // (game, variant), and the rated pair (a, b) with its bound; grouping them
+    // into a struct would only obscure a faithful query signature.
+    #[allow(clippy::too_many_arguments)]
     fn rating_within(
         &self,
+        authority: &PublicKey,
+        kind: RatingKind,
         game: &str,
+        variant: &str,
         a: &PublicKey,
-        a_variant: &str,
         b: &PublicKey,
-        b_variant: &str,
         max_delta: u16,
     ) -> bool;
 }
@@ -85,6 +101,10 @@ pub enum Incompatibility {
     /// A `rating` filter applies but the relevant variant is unresolved (free),
     /// so the rating cannot be looked up; the pair is conservatively rejected.
     RatingNeedsResolvedVariant,
+    /// A `rating` filter applies but the two players' resolved variants differ.
+    /// Ratings live in per-`(game, variant)` pools, so there is no shared pool
+    /// to compare in; the pair is rejected (kind `6419` §Consent constraints).
+    RatingNeedsSameVariant,
 }
 
 /// Evaluates whether `a` and `b` can be paired, resolving each player's variant.
@@ -190,9 +210,15 @@ fn satisfies(
                 Err(Incompatibility::FilterRejected)
             }
         }
-        Filter::Rating { max_delta } => match (filterer_variant, other_variant) {
-            (Some(fv), Some(ov)) => {
-                if facts.rating_within(game, filterer, fv, other, ov, max_delta) {
+        Filter::Rating {
+            max_delta,
+            authority,
+            kind,
+        } => match (filterer_variant, other_variant) {
+            (Some(fv), Some(ov)) if fv != ov => Err(Incompatibility::RatingNeedsSameVariant),
+            (Some(variant), Some(_)) => {
+                if facts.rating_within(&authority, kind, game, variant, filterer, other, max_delta)
+                {
                     Ok(())
                 } else {
                     Err(Incompatibility::FilterRejected)
@@ -208,7 +234,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::{evaluate, Compatibility, Facts, Incompatibility};
-    use crate::open_challenge::OpenChallenge;
+    use crate::open_challenge::{OpenChallenge, RatingKind};
     use nostr::prelude::*;
 
     /// A mock of the external facts, parameterized by the two players.
@@ -245,15 +271,22 @@ mod tests {
 
         fn rating_within(
             &self,
+            _authority: &PublicKey,
+            _kind: RatingKind,
             _game: &str,
+            _variant: &str,
             _a: &PublicKey,
-            _av: &str,
             _b: &PublicKey,
-            _bv: &str,
             _max_delta: u16,
         ) -> bool {
             self.rating_ok
         }
+    }
+
+    /// A `rating` filter tag pinning a fresh authority (Glicko-2).
+    fn rating_filter(max_delta: &str) -> Tag {
+        let authority = Keys::generate().public_key().to_hex();
+        Tag::parse(["filter", "rating", max_delta, &authority, "6427"]).unwrap()
     }
 
     fn p(keys: &Keys, role: &str) -> Tag {
@@ -567,12 +600,7 @@ mod tests {
             &s.mm,
             &s.arb,
             &s.ts,
-            vec![
-                game(),
-                variant("self", "ogi"),
-                tc(),
-                Tag::parse(["filter", "rating", "200"]).unwrap(),
-            ],
+            vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
         );
 
         let mut facts = MockFacts::new(&s.alice, &s.bob);
@@ -600,18 +628,40 @@ mod tests {
             &s.mm,
             &s.arb,
             &s.ts,
-            vec![
-                game(),
-                variant("self", "ogi"),
-                tc(),
-                Tag::parse(["filter", "rating", "200"]).unwrap(),
-            ],
+            vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
         );
         let mut facts = MockFacts::new(&s.alice, &s.bob);
         facts.rating_ok = true;
         assert_eq!(
             evaluate(&a, &b, &facts),
             Compatibility::Incompatible(Incompatibility::RatingNeedsResolvedVariant)
+        );
+    }
+
+    #[test]
+    fn rating_filter_needs_same_variant() {
+        let s = stage();
+        // Both variants are resolved but differ (ogi vs chess): a multi-variant
+        // pairing has no shared rating pool, so a rating filter cannot apply.
+        let a = oc(
+            &s.alice,
+            &s.mm,
+            &s.arb,
+            &s.ts,
+            vec![game(), variant("self", "chess"), tc()],
+        );
+        let b = oc(
+            &s.bob,
+            &s.mm,
+            &s.arb,
+            &s.ts,
+            vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
+        );
+        let mut facts = MockFacts::new(&s.alice, &s.bob);
+        facts.rating_ok = true;
+        assert_eq!(
+            evaluate(&a, &b, &facts),
+            Compatibility::Incompatible(Incompatibility::RatingNeedsSameVariant)
         );
     }
 }

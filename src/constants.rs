@@ -34,8 +34,17 @@ pub const FILTER_EVERYONE: &str = "everyone";
 /// `filter` mode: accept only opponents the signer follows (NIP-02).
 pub const FILTER_FOLLOWING: &str = "following";
 
-/// `filter` mode: accept only opponents within a rating delta.
+/// `filter` mode: accept only opponents within a rating delta, as rated by a
+/// pinned rating authority.
 pub const FILTER_RATING: &str = "rating";
+
+/// Kind of an Elo Rating Attestation — a pinnable rating source for the `rating`
+/// filter mode.
+pub const KIND_ELO_RATING_ATTESTATION: u16 = 6426;
+
+/// Kind of a Glicko-2 Rating Attestation — a pinnable rating source for the
+/// `rating` filter mode.
+pub const KIND_GLICKO2_RATING_ATTESTATION: u16 = 6427;
 
 /// `game` tag name.
 pub const TAG_GAME: &str = "game";

@@ -12,11 +12,47 @@
 use nostr::{Event, EventId, Kind, PublicKey, Tag};
 
 use crate::constants::{
-    FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_OPEN_CHALLENGE, ROLE_ARBITER,
-    ROLE_MATCHMAKER, ROLE_TIMESTAMPER, SELECTOR_OPPONENT, SELECTOR_SELF, TAG_ACCEPT_UNTIL,
-    TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_TIME_CONTROL, TAG_VARIANT,
+    FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_ELO_RATING_ATTESTATION,
+    KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, ROLE_ARBITER, ROLE_MATCHMAKER,
+    ROLE_TIMESTAMPER, SELECTOR_OPPONENT, SELECTOR_SELF, TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME,
+    TAG_NONCE, TAG_TIME_CONTROL, TAG_VARIANT,
 };
 use crate::error::ParseError;
+
+/// The rating system a `rating` filter pins as its authoritative source.
+///
+/// The on-wire value is the attestation kind: `6426` for Elo, `6427` for
+/// Glicko-2. A filter pins both a rating-authority pubkey and one of these
+/// kinds, so the rating it compares is objective and retroactively verifiable
+/// (rating attestations are regular, persistent events).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RatingKind {
+    /// Elo Rating Attestation (kind `6426`).
+    Elo,
+    /// Glicko-2 Rating Attestation (kind `6427`).
+    Glicko2,
+}
+
+impl RatingKind {
+    /// The attestation kind number (`6426` or `6427`).
+    #[must_use]
+    pub const fn as_u16(self) -> u16 {
+        match self {
+            Self::Elo => KIND_ELO_RATING_ATTESTATION,
+            Self::Glicko2 => KIND_GLICKO2_RATING_ATTESTATION,
+        }
+    }
+
+    /// Parses the on-wire kind string (`"6426"` / `"6427"`), or `None`.
+    #[must_use]
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "6426" => Some(Self::Elo),
+            "6427" => Some(Self::Glicko2),
+            _ => None,
+        }
+    }
+}
 
 /// A player's eligibility filter for the sought opponent.
 ///
@@ -29,10 +65,16 @@ pub enum Filter {
     Everyone,
     /// Only opponents the signer follows (NIP-02).
     Following,
-    /// Only opponents within `max_delta` rating points (1..=9999).
+    /// Only opponents within `max_delta` rating points (1..=9999), as rated by
+    /// the pinned `authority` under the pinned rating `kind`.
     Rating {
         /// The maximum admissible rating difference.
         max_delta: u16,
+        /// The rating authority whose attestations are authoritative for this
+        /// filter.
+        authority: PublicKey,
+        /// The rating system consumed (Elo `6426` or Glicko-2 `6427`).
+        kind: RatingKind,
     },
 }
 
@@ -361,10 +403,23 @@ fn filter_from_slice(slice: &[String]) -> Result<Filter, ParseError> {
     match slice.get(1).map(String::as_str) {
         Some(FILTER_EVERYONE) if slice.len() == 2 => Ok(Filter::Everyone),
         Some(FILTER_FOLLOWING) if slice.len() == 2 => Ok(Filter::Following),
-        Some(FILTER_RATING) if slice.len() == 3 => {
-            let raw = slice.get(2).map(String::as_str).unwrap_or_default();
-            let max_delta = parse_max_delta(raw).ok_or(ParseError::MalformedFilter)?;
-            Ok(Filter::Rating { max_delta })
+        Some(FILTER_RATING) if slice.len() == 5 => {
+            let raw_delta = slice.get(2).map(String::as_str).unwrap_or_default();
+            let max_delta = parse_max_delta(raw_delta).ok_or(ParseError::MalformedFilter)?;
+
+            let raw_authority = slice.get(3).map(String::as_str).unwrap_or_default();
+            let authority =
+                PublicKey::parse(raw_authority).map_err(|_| ParseError::InvalidRatingAuthority)?;
+
+            let raw_kind = slice.get(4).map(String::as_str).unwrap_or_default();
+            let kind = RatingKind::parse(raw_kind)
+                .ok_or_else(|| ParseError::InvalidRatingKind(raw_kind.to_string()))?;
+
+            Ok(Filter::Rating {
+                max_delta,
+                authority,
+                kind,
+            })
         }
         Some(FILTER_EVERYONE | FILTER_FOLLOWING | FILTER_RATING) => {
             Err(ParseError::MalformedFilter)
@@ -468,7 +523,7 @@ mod tests {
         clippy::indexing_slicing
     )]
 
-    use super::{Filter, OpenChallenge};
+    use super::{Filter, OpenChallenge, RatingKind};
     use crate::constants::KIND_OPEN_CHALLENGE;
     use crate::error::ParseError;
     use nostr::prelude::*;
@@ -580,12 +635,86 @@ mod tests {
     #[test]
     fn parses_rating_filter() {
         let parties = parties();
+        let authority = Keys::generate();
         let mut tags = valid_tags(&parties);
-        tags.push(Tag::parse(["filter", "rating", "200"]).unwrap());
+        tags.push(
+            Tag::parse([
+                "filter",
+                "rating",
+                "200",
+                &authority.public_key().to_hex(),
+                "6427",
+            ])
+            .unwrap(),
+        );
         let event = signed(&parties, "", tags);
         assert_eq!(
             OpenChallenge::parse(&event).expect("valid").filter(),
-            Filter::Rating { max_delta: 200 }
+            Filter::Rating {
+                max_delta: 200,
+                authority: authority.public_key(),
+                kind: RatingKind::Glicko2,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_elo_rating_filter_kind() {
+        let parties = parties();
+        let authority = Keys::generate();
+        let mut tags = valid_tags(&parties);
+        tags.push(
+            Tag::parse([
+                "filter",
+                "rating",
+                "50",
+                &authority.public_key().to_hex(),
+                "6426",
+            ])
+            .unwrap(),
+        );
+        let event = signed(&parties, "", tags);
+        assert_eq!(
+            OpenChallenge::parse(&event).expect("valid").filter(),
+            Filter::Rating {
+                max_delta: 50,
+                authority: authority.public_key(),
+                kind: RatingKind::Elo,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_rating_filter_with_invalid_authority() {
+        let parties = parties();
+        let mut tags = valid_tags(&parties);
+        tags.push(Tag::parse(["filter", "rating", "200", "not-a-pubkey", "6427"]).unwrap());
+        let event = signed(&parties, "", tags);
+        assert_eq!(
+            OpenChallenge::parse(&event),
+            Err(ParseError::InvalidRatingAuthority)
+        );
+    }
+
+    #[test]
+    fn rejects_rating_filter_with_invalid_kind() {
+        let parties = parties();
+        let authority = Keys::generate();
+        let mut tags = valid_tags(&parties);
+        tags.push(
+            Tag::parse([
+                "filter",
+                "rating",
+                "200",
+                &authority.public_key().to_hex(),
+                "9999",
+            ])
+            .unwrap(),
+        );
+        let event = signed(&parties, "", tags);
+        assert_eq!(
+            OpenChallenge::parse(&event),
+            Err(ParseError::InvalidRatingKind("9999".to_string()))
         );
     }
 
@@ -787,11 +916,13 @@ mod tests {
     #[test]
     fn rejects_malformed_rating_filter() {
         let parties = parties();
+        let authority = Keys::generate().public_key().to_hex();
         for bad in [
-            vec!["filter", "rating"],          // missing delta
-            vec!["filter", "rating", "0"],     // leading zero / zero
-            vec!["filter", "rating", "10000"], // too large (5 digits)
-            vec!["filter", "everyone", "x"],   // extra value
+            vec!["filter", "rating"],                              // wrong arity (2)
+            vec!["filter", "rating", "200"], // wrong arity (3, no authority/kind)
+            vec!["filter", "rating", "0", &authority, "6427"], // zero delta
+            vec!["filter", "rating", "10000", &authority, "6427"], // delta too large (5 digits)
+            vec!["filter", "everyone", "x"], // extra value on everyone
         ] {
             let mut tags = valid_tags(&parties);
             tags.push(Tag::parse(bad).unwrap());

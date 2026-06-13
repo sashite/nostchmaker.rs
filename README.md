@@ -46,19 +46,26 @@ kind 6418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
 
 ```rust
 use nostchmaker::compatibility::{evaluate, Compatibility, Facts};
-use nostchmaker::open_challenge::OpenChallenge;
-use nostchmaker::pairing::PairingBuilder;
+use nostchmaker::open_challenge::{OpenChallenge, RatingKind};
 use nostr::PublicKey;
+use nostchmaker::pairing::PairingBuilder;
 
-// The consumer resolves the external facts the filters need (NIP-02 contact
-// lists, ratings). `everyone`-filtered pools need none of this.
+// The consumer resolves the external facts the filters need, anchored at the
+// Pairing's canonical attestation: the contact list as of the anchor, and the
+// most recent attestation by the *pinned* authority (under the pinned kind)
+// with created_at at or before the anchor. `everyone`-filtered pools need none
+// of this.
 struct MyFacts;
 impl Facts for MyFacts {
     fn follows(&self, _follower: &PublicKey, _target: &PublicKey) -> bool { false }
     fn rating_within(
-        &self, _game: &str,
-        _a: &PublicKey, _av: &str,
-        _b: &PublicKey, _bv: &str,
+        &self,
+        _authority: &PublicKey,
+        _kind: RatingKind,
+        _game: &str,
+        _variant: &str,
+        _a: &PublicKey,
+        _b: &PublicKey,
         _max_delta: u16,
     ) -> bool { false }
 }
@@ -82,7 +89,12 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge) {
 `evaluate` encodes the consent constraints of kind `6419` that are decidable
 from the two Open Challenges plus the resolved facts: distinct signers, a common
 matchmaker / arbiter / timestamper, a common game, an identical time control, a
-satisfiable variant resolution, and each player satisfying the other's filter.
+satisfiable variant resolution, and each player satisfying the other's filter. A
+`following` filter binds against the filterer's contact list; a `rating` filter
+binds against the rating authority the filterer **pins** in their Open Challenge
+(an authority pubkey plus the attestation kind, `6426` Elo or `6427` Glicko-2),
+and is satisfiable only for a same-variant pairing (ratings live in
+per-`(game, variant)` pools).
 
 It is deliberately **silent** on the rest, which a higher layer enforces:
 

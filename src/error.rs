@@ -60,9 +60,16 @@ pub enum ParseError {
     /// the offending mode.
     InvalidFilterMode(String),
     /// A `filter` tag is structurally wrong for its mode: a missing or malformed
-    /// `rating` delta (not `^[1-9][0-9]{0,3}$`), or an extra value on
-    /// `everyone` / `following`.
+    /// `rating` delta (not `^[1-9][0-9]{0,3}$`), the wrong arity for the mode
+    /// (`everyone` / `following` take no value; `rating` takes exactly three:
+    /// delta, authority, kind), or an extra value on `everyone` / `following`.
     MalformedFilter,
+    /// A `rating` filter's pinned rating-authority pubkey (fourth element) does
+    /// not parse.
+    InvalidRatingAuthority,
+    /// A `rating` filter's pinned rating kind (fifth element) is neither `6426`
+    /// (Elo) nor `6427` (Glicko-2). Carries the offending value.
+    InvalidRatingKind(String),
     /// No `accept_until` tag is present.
     MissingAcceptUntil,
     /// More than one `accept_until` tag is present. Carries the count.
@@ -110,6 +117,12 @@ impl fmt::Display for ParseError {
             }
             Self::InvalidFilterMode(mode) => write!(f, "invalid filter mode: {mode:?}"),
             Self::MalformedFilter => f.write_str("malformed `filter` tag for its mode"),
+            Self::InvalidRatingAuthority => {
+                f.write_str("the `rating` filter's pinned authority pubkey is invalid")
+            }
+            Self::InvalidRatingKind(value) => {
+                write!(f, "invalid `rating` filter kind: {value:?} (expected `6426` or `6427`)")
+            }
             Self::MissingAcceptUntil => f.write_str("missing the required `accept_until` tag"),
             Self::MultipleAcceptUntil(count) => {
                 write!(f, "expected exactly one `accept_until` tag, found {count}")
