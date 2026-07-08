@@ -4,6 +4,45 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-07-09
+
+Aligns the `rating` filter's comparison pool with the revised kind `6419`
+consent constraint 9: the pool follows the **pinned rating authority's published
+pool policy** — per-(game, variant) (the rating specifications' default), or
+per-game where the authority unifies a game's variants (e.g. Sashité's `sanki`
+authority). A same-variant pairing is no longer a universal requirement for the
+`rating` filter; it applies only under the per-(game, variant) policy.
+
+### Changed — breaking
+
+- **`Facts` gains a required method** `pool_policy(&self, authority: &PublicKey,
+  kind: RatingKind) -> Option<PoolPolicy>`: the pool policy published (out of
+  band) by the pinned authority. Returning `None` (policy unknown) makes
+  `evaluate` reject the pair with the new
+  `Incompatibility::UnknownRatingPoolPolicy` (fail-closed) — a Pairing built on
+  a guessed pool would be non-conforming for every verifier that knows the
+  policy.
+- **`Facts::rating_within` signature changed**: the `game: &str, variant: &str`
+  pair is replaced by a single `pool: RatingPool<'_>` — either
+  `RatingPool::PerGame { game }` or `RatingPool::PerGameVariant { game, variant }`,
+  always consistent with the policy reported by `pool_policy`. Implementers
+  select the "most recent qualifying attestation" within that pool (per-game:
+  all of the authority's attestations for the game, regardless of their
+  `variant` tags; per-(game, variant): those identifying that exact pool).
+
+### Added
+
+- `compatibility::PoolPolicy` (`PerGameVariant` / `PerGame`).
+- `compatibility::RatingPool<'_>` (the pool passed to `rating_within`).
+- `Incompatibility::UnknownRatingPoolPolicy` (fail-closed unknown policy).
+- Under `PoolPolicy::PerGame`, the `rating` filter now binds multi-variant and
+  variant-free pairings: `RatingNeedsSameVariant` / `RatingNeedsResolvedVariant`
+  are scoped to the per-(game, variant) policy.
+
+### Removed
+
+- The unused `proptest` dev-dependency.
+
 ## [0.3.0] — 2026-07-08
 
 Makes the timestamper designation **optional**, so a session can run self-timed

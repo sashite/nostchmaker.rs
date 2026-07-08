@@ -1,6 +1,6 @@
 [package]
 name = "nostchmaker"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.96"
 license = "Apache-2.0"
@@ -15,9 +15,6 @@ exclude = [".github/", "rust-toolchain.toml", "rustfmt.toml", "deny.toml"]
 # Event types only (Event, EventBuilder, Tag, EventId, PublicKey, ...). No
 # client/transport: this crate is a pure, transport-agnostic primitive.
 nostr = { version = "0.44", features = ["std"], default-features = false }
-
-[dev-dependencies]
-proptest = "1"
 
 [lints.clippy]
 arithmetic_side_effects = "deny"

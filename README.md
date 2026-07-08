@@ -11,9 +11,10 @@ family.
 > relying on it in production.
 
 A player enters a matchmaking pool by publishing a signed **Open Challenge**
-(kind `6418`) that names a matchmaker, arbiter, and timestamper, and carries the
-session terms (game, per-role variant preferences, time control, opponent
-filter) — but no opponent. A designated **matchmaker** pairs two compatible Open
+(kind `6418`) that names a matchmaker, an arbiter, and optionally a timestamper
+(absent → the session is self-timed, the default), and carries the session
+terms (game, per-role variant preferences, time control, opponent filter) — but
+no opponent. A designated **matchmaker** pairs two compatible Open
 Challenges by publishing a **Pairing** (kind `6419`), without any acceptance
 signature from the players: their consent is pre-committed in their Open
 Challenges, and a Pairing is binding only if it respects both.
@@ -45,25 +46,33 @@ kind 6418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
 ## Usage
 
 ```rust
-use nostchmaker::compatibility::{evaluate, Compatibility, Facts};
+use nostchmaker::compatibility::{evaluate, Compatibility, Facts, PoolPolicy, RatingPool};
 use nostchmaker::open_challenge::{OpenChallenge, RatingKind};
 use nostr::PublicKey;
 use nostchmaker::pairing::PairingBuilder;
 
 // The consumer resolves the external facts the filters need, anchored at the
-// Pairing's canonical attestation: the contact list as of the anchor, and the
-// most recent attestation by the *pinned* authority (under the pinned kind)
-// with created_at at or before the anchor. `everyone`-filtered pools need none
-// of this.
+// Pairing's canonical timing: the contact list as of the anchor, and the most
+// recent attestation by the *pinned* authority (under the pinned kind) with
+// created_at at or before the anchor — in the pool the authority's published
+// pool policy defines. `everyone`-filtered pools need none of this.
 struct MyFacts;
 impl Facts for MyFacts {
     fn follows(&self, _follower: &PublicKey, _target: &PublicKey) -> bool { false }
+    fn pool_policy(
+        &self,
+        _authority: &PublicKey,
+        _kind: RatingKind,
+    ) -> Option<PoolPolicy> {
+        // Fail-closed when the pinned authority's published policy is unknown.
+        // E.g. Sashité's `sanki` authority publishes `Some(PoolPolicy::PerGame)`.
+        None
+    }
     fn rating_within(
         &self,
         _authority: &PublicKey,
         _kind: RatingKind,
-        _game: &str,
-        _variant: &str,
+        _pool: RatingPool<'_>,
         _a: &PublicKey,
         _b: &PublicKey,
         _max_delta: u16,
@@ -92,14 +101,19 @@ matchmaker / arbiter / timestamper, a common game, an identical time control, a
 satisfiable variant resolution, and each player satisfying the other's filter. A
 `following` filter binds against the filterer's contact list; a `rating` filter
 binds against the rating authority the filterer **pins** in their Open Challenge
-(an authority pubkey plus the attestation kind, `6426` Elo or `6427` Glicko-2),
-and is satisfiable only for a same-variant pairing (ratings live in
-per-`(game, variant)` pools).
+(an authority pubkey plus the attestation kind, `6426` Elo or `6427` Glicko-2).
+The comparison pool follows the pinned authority's **published pool policy**
+(kind `6419` §Consent constraints): under a per-`(game, variant)` policy (the
+rating specifications' default) the filter is satisfiable only for a
+same-variant pairing; under a per-game policy (e.g. Sashité's `sanki` authority)
+it binds across any variant combination, resolved or free. An unknown policy is
+fail-closed: the pair is not matched.
 
 It is deliberately **silent** on the rest, which a higher layer enforces:
 
-- the accept-deadline (a timing decision anchored on the Pairing's timestamper
-  attestation);
+- the accept-deadline (a timing decision anchored on the Pairing's canonical
+  timing — its timestamper attestation in attested mode, its own relay-enforced
+  `created_at` in self-timed mode);
 - the Pairing event's own shape (it is built by `PairingBuilder`);
 - any operational policy such as a game allow-list or NIP-51 mute lists.
 
