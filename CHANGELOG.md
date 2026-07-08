@@ -4,6 +4,25 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-07-08
+
+Makes the timestamper designation **optional**, so a session can run self-timed
+(the default): attestation becomes a dormant capability (nostr-integration
+§Timing). The matchmaker and arbiter stay required.
+
+### Changed — breaking
+
+- **`OpenChallenge::timestamper()` now returns `Option<PublicKey>`** (was
+  `PublicKey`). A kind-`6418` event may omit the `timestamper` `p` tag; parsing
+  then succeeds with `None`. A present tag is still validated (well-formed,
+  distinct from the signer, at most one) — a malformed or duplicate one is a
+  parse error, and `MissingRole` is no longer produced for `timestamper`.
+- **`PairingBuilder` designates a timestamper only when the paired challenges
+  named one.** A self-timed pair yields a Pairing (`6419`) with no `timestamper`
+  `p` tag. Two Open Challenges are timing-compatible when both name the same
+  timestamper or both name none; a one-sided designation is an
+  `Incompatibility::TimestamperMismatch`.
+
 ## [0.2.0] — 2026-06-13
 
 Aligns the `rating` filter with the revised kind `6418` / `6419` consent

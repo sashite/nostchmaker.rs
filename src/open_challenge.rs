@@ -121,7 +121,7 @@ pub struct OpenChallenge {
     signer: PublicKey,
     matchmaker: PublicKey,
     arbiter: PublicKey,
-    timestamper: PublicKey,
+    timestamper: Option<PublicKey>,
     game: String,
     self_variant: Option<String>,
     opponent_variant: Option<String>,
@@ -150,9 +150,13 @@ impl OpenChallenge {
         }
 
         // Constraint 1 — authorized third parties (each distinct from the signer).
+        // The matchmaker and arbiter are required; the timestamper is OPTIONAL — absent
+        // → the paired session is self-timed (the default), exactly one → attested mode
+        // (attestation is a dormant capability). A present-but-malformed or duplicate
+        // timestamper, or one equal to the signer, is still a parse error.
         let matchmaker = role_pubkey(event, ROLE_MATCHMAKER)?;
         let arbiter = role_pubkey(event, ROLE_ARBITER)?;
-        let timestamper = role_pubkey(event, ROLE_TIMESTAMPER)?;
+        let timestamper = role_pubkey_opt(event, ROLE_TIMESTAMPER)?;
 
         // Constraint 2 — exactly one valid game identifier.
         let game = parse_game(event)?;
@@ -211,9 +215,10 @@ impl OpenChallenge {
         self.arbiter
     }
 
-    /// The authorized timestamper.
+    /// The authorized timestamper, or `None` when the challenge designates none
+    /// (self-timed mode — the default; attestation is a dormant capability).
     #[must_use]
-    pub fn timestamper(&self) -> PublicKey {
+    pub fn timestamper(&self) -> Option<PublicKey> {
         self.timestamper
     }
 
@@ -257,15 +262,23 @@ impl OpenChallenge {
 // --- parsing helpers (total, panic-free) ------------------------------------
 
 /// Resolves the single `p` tag carrying `role` as its fourth element into a
-/// pubkey distinct from the signer.
+/// pubkey distinct from the signer. The role is REQUIRED: an absent tag is a
+/// [`ParseError::MissingRole`].
 fn role_pubkey(event: &Event, role: &'static str) -> Result<PublicKey, ParseError> {
+    role_pubkey_opt(event, role)?.ok_or(ParseError::MissingRole(role))
+}
+
+/// Like [`role_pubkey`], but the role is OPTIONAL: an absent tag resolves to
+/// `None` rather than an error. A single present tag is validated exactly as the
+/// required case (well-formed, distinct from the signer); a duplicate is rejected.
+fn role_pubkey_opt(event: &Event, role: &'static str) -> Result<Option<PublicKey>, ParseError> {
     let tags: Vec<&Tag> = event
         .tags
         .iter()
         .filter(|tag| is_p_role(tag, role))
         .collect();
     match tags.as_slice() {
-        [] => Err(ParseError::MissingRole(role)),
+        [] => Ok(None),
         [tag] => {
             let hex = tag
                 .as_slice()
@@ -276,7 +289,7 @@ fn role_pubkey(event: &Event, role: &'static str) -> Result<PublicKey, ParseErro
             if pubkey == event.pubkey {
                 return Err(ParseError::RoleEqualsSigner(role));
             }
-            Ok(pubkey)
+            Ok(Some(pubkey))
         }
         _ => Err(ParseError::DuplicateRole(role)),
     }
@@ -595,7 +608,7 @@ mod tests {
         assert_eq!(oc.signer(), parties.signer.public_key());
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
         assert_eq!(oc.arbiter(), parties.arbiter.public_key());
-        assert_eq!(oc.timestamper(), parties.timestamper.public_key());
+        assert_eq!(oc.timestamper(), Some(parties.timestamper.public_key()));
         assert_eq!(oc.game(), "sanki");
         assert_eq!(oc.self_variant(), Some("ogi"));
         assert_eq!(oc.opponent_variant(), Some("ogi"));
@@ -607,6 +620,23 @@ mod tests {
         assert_eq!(periods[0].duration(), 300);
         assert_eq!(periods[0].increment(), Some(3));
         assert_eq!(periods[0].plies(), None);
+    }
+
+    #[test]
+    fn accepts_a_self_timed_challenge_with_no_timestamper() {
+        // Attestation is a dormant capability: a challenge that designates no
+        // timestamper is valid and self-timed. The matchmaker/arbiter stay required.
+        let parties = parties();
+        let mut tags = valid_tags(&parties);
+        tags.retain(|t| {
+            !(t.as_slice().first().map(String::as_str) == Some("p")
+                && t.as_slice().get(3).map(String::as_str) == Some("timestamper"))
+        });
+        let event = signed(&parties, "", tags);
+        let oc = OpenChallenge::parse(&event).expect("self-timed challenge is valid");
+        assert_eq!(oc.timestamper(), None);
+        assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
+        assert_eq!(oc.arbiter(), parties.arbiter.public_key());
     }
 
     #[test]

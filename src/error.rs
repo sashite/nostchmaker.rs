@@ -24,8 +24,9 @@ pub enum ParseError {
     WrongKind(u16),
     /// The `content` field is not the empty string.
     NonEmptyContent,
-    /// A required role `p` tag (`matchmaker`, `arbiter`, or `timestamper`) is
-    /// absent. Carries the role marker.
+    /// A required role `p` tag (`matchmaker` or `arbiter`) is absent. Carries the
+    /// role marker. The `timestamper` role is optional (self-timed default) and so
+    /// never yields this error.
     MissingRole(&'static str),
     /// A role marker appears on more than one `p` tag. Carries the role marker.
     DuplicateRole(&'static str),

@@ -87,14 +87,20 @@ impl<'a> PairingBuilder<'a> {
             // The two referenced Open Challenges.
             e_tag(self.a.id(), hint, MARKER_OPEN_CHALLENGE),
             e_tag(self.b.id(), hint, MARKER_OPEN_CHALLENGE),
-            // The two players and the concrete arbiter / timestamper.
+            // The two players and the concrete arbiter.
             p_tag(self.a.signer(), hint, ROLE_PLAYER),
             p_tag(self.b.signer(), hint, ROLE_PLAYER),
             p_tag(self.a.arbiter(), hint, ROLE_ARBITER),
-            p_tag(self.a.timestamper(), hint, ROLE_TIMESTAMPER),
             // Game (shared by both Open Challenges).
             Tag::custom(TagKind::custom(TAG_GAME), [self.a.game().to_string()]),
         ];
+
+        // The timestamper is optional: designated only when the (compatible) pair named
+        // one — attested mode; absent → the session is self-timed. `a` and `b` agree
+        // (compatibility rejects a timestamper mismatch), so `a`'s value is canonical.
+        if let Some(timestamper) = self.a.timestamper() {
+            tags.push(p_tag(timestamper, hint, ROLE_TIMESTAMPER));
+        }
 
         // Per-player resolved variants (pubkey-based), when supplied.
         if let Some(variant) = self.a_variant {
@@ -175,6 +181,25 @@ mod tests {
             p(arbiter, "arbiter"),
             p(timestamper, "timestamper"),
         ];
+        tags.extend(terms);
+        tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
+        tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
+        let event = EventBuilder::new(Kind::Custom(6418), "")
+            .tags(tags)
+            .custom_created_at(Timestamp::from(1000))
+            .sign_with_keys(signer)
+            .unwrap();
+        OpenChallenge::parse(&event).unwrap()
+    }
+
+    /// Like [`oc`], but designates NO timestamper — a self-timed challenge.
+    fn oc_self_timed(
+        signer: &Keys,
+        matchmaker: &Keys,
+        arbiter: &Keys,
+        terms: Vec<Tag>,
+    ) -> OpenChallenge {
+        let mut tags = vec![p(matchmaker, "matchmaker"), p(arbiter, "arbiter")];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
@@ -290,6 +315,42 @@ mod tests {
         let bob_hex = bob.public_key().to_hex();
         assert!(variants.iter().any(|s| s[1] == alice_hex && s[2] == "ogi"));
         assert!(variants.iter().any(|s| s[1] == bob_hex && s[2] == "chess"));
+    }
+
+    #[test]
+    fn a_self_timed_pairing_designates_no_timestamper() {
+        // Two self-timed challenges (no timestamper) pair into a 6419 that likewise
+        // designates none — the session runs self-timed.
+        let mm = Keys::generate();
+        let arb = Keys::generate();
+        let alice = Keys::generate();
+        let bob = Keys::generate();
+        let terms = || {
+            vec![
+                Tag::parse(["game", "sanki"]).unwrap(),
+                Tag::parse(["time_control", "300", "3"]).unwrap(),
+            ]
+        };
+        let a = oc_self_timed(&alice, &mm, &arb, terms());
+        let b = oc_self_timed(&bob, &mm, &arb, terms());
+
+        let pairing = PairingBuilder::new(&a, &b)
+            .to_event_builder()
+            .sign_with_keys(&mm)
+            .unwrap();
+
+        pairing.verify().unwrap();
+        // One arbiter, and ZERO timestamper p tags.
+        let arbiters = tags_named(&pairing, "p")
+            .into_iter()
+            .filter(|s| s.get(3).map(String::as_str) == Some("arbiter"))
+            .count();
+        let timestampers = tags_named(&pairing, "p")
+            .into_iter()
+            .filter(|s| s.get(3).map(String::as_str) == Some("timestamper"))
+            .count();
+        assert_eq!(arbiters, 1);
+        assert_eq!(timestampers, 0);
     }
 
     #[test]

@@ -318,6 +318,25 @@ mod tests {
         OpenChallenge::parse(&event).unwrap()
     }
 
+    /// Like [`oc`], but designates NO timestamper — a self-timed challenge.
+    fn oc_self_timed(
+        signer: &Keys,
+        matchmaker: &Keys,
+        arbiter: &Keys,
+        terms: Vec<Tag>,
+    ) -> OpenChallenge {
+        let mut tags = vec![p(matchmaker, "matchmaker"), p(arbiter, "arbiter")];
+        tags.extend(terms);
+        tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
+        tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
+        let event = EventBuilder::new(Kind::Custom(6418), "")
+            .tags(tags)
+            .custom_created_at(Timestamp::from(1000))
+            .sign_with_keys(signer)
+            .unwrap();
+        OpenChallenge::parse(&event).unwrap()
+    }
+
     fn tc() -> Tag {
         Tag::parse(["time_control", "300", "3"]).unwrap()
     }
@@ -507,6 +526,34 @@ mod tests {
         );
         assert_eq!(
             evaluate(&a, &b_ts, &facts),
+            Compatibility::Incompatible(Incompatibility::TimestamperMismatch)
+        );
+    }
+
+    #[test]
+    fn compatible_when_both_self_timed() {
+        // Two challenges that both designate no timestamper agree on timing
+        // (self-timed) and pair — attestation being a dormant capability.
+        let s = stage();
+        let a = oc_self_timed(&s.alice, &s.mm, &s.arb, vec![game(), tc()]);
+        let b = oc_self_timed(&s.bob, &s.mm, &s.arb, vec![game(), tc()]);
+        let facts = MockFacts::new(&s.alice, &s.bob);
+        assert!(matches!(
+            evaluate(&a, &b, &facts),
+            Compatibility::Compatible { .. }
+        ));
+    }
+
+    #[test]
+    fn incompatible_when_one_self_timed_one_attested() {
+        // A self-timed challenge and an attested one disagree on timing mode and
+        // cannot be paired (Some vs None is a timestamper mismatch).
+        let s = stage();
+        let attested = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let self_timed = oc_self_timed(&s.bob, &s.mm, &s.arb, vec![game(), tc()]);
+        let facts = MockFacts::new(&s.alice, &s.bob);
+        assert_eq!(
+            evaluate(&attested, &self_timed, &facts),
             Compatibility::Incompatible(Incompatibility::TimestamperMismatch)
         );
     }
