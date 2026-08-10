@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Errors from parsing a kind-`6418` event into an
+//! Errors from parsing a kind-`3418` event into an
 //! [`OpenChallenge`](crate::open_challenge::OpenChallenge).
 //!
-//! Every variant is decidable from the event alone (kind `6418` §Semantic
+//! Every variant is decidable from the event alone (kind `3418` §Semantic
 //! constraints): no external event need be fetched.
 //! [`OpenChallenge::parse`](crate::open_challenge::OpenChallenge::parse) returns
 //! the first violated rule.
@@ -12,7 +12,7 @@ use core::fmt;
 
 use crate::constants::KIND_OPEN_CHALLENGE;
 
-/// A reason a Nostr event is not a conforming Open Challenge (kind `6418`).
+/// A reason a Nostr event is not a conforming Open Challenge (kind `3418`).
 ///
 /// Returned by [`OpenChallenge::parse`](crate::open_challenge::OpenChallenge::parse).
 /// The enum is `#[non_exhaustive]`: future revisions may add variants without a
@@ -68,8 +68,8 @@ pub enum ParseError {
     /// A `rating` filter's pinned rating-authority pubkey (fourth element) does
     /// not parse.
     InvalidRatingAuthority,
-    /// A `rating` filter's pinned rating kind (fifth element) is neither `6426`
-    /// (Elo) nor `6427` (Glicko-2). Carries the offending value.
+    /// A `rating` filter's pinned rating kind (fifth element) is neither `3426`
+    /// (Elo) nor `3427` (Glicko-2). Carries the offending value.
     InvalidRatingKind(String),
     /// No `accept_until` tag is present.
     MissingAcceptUntil,
@@ -122,7 +122,7 @@ impl fmt::Display for ParseError {
                 f.write_str("the `rating` filter's pinned authority pubkey is invalid")
             }
             Self::InvalidRatingKind(value) => {
-                write!(f, "invalid `rating` filter kind: {value:?} (expected `6426` or `6427`)")
+                write!(f, "invalid `rating` filter kind: {value:?} (expected `3426` or `3427`)")
             }
             Self::MissingAcceptUntil => f.write_str("missing the required `accept_until` tag"),
             Self::MultipleAcceptUntil(count) => {

@@ -1,21 +1,21 @@
 # nostchmaker
 
-Pair **Open Challenges** into **Pairings** (kinds `6418` / `6419`) for
+Pair **Open Challenges** into **Pairings** (kinds `3418` / `3419`) for
 [Nostr](https://github.com/nostr-protocol/nostr): a game-agnostic matchmaking
 primitive for turn-based, two-player abstract strategy board games of the chess
 family.
 
-> **Status — proposed NIP.** The kinds `6418` (Open Challenge) and `6419`
+> **Status — proposed NIP.** The kinds `3418` (Open Challenge) and `3419`
 > (Pairing) belong to a NIP suite that is still a **draft**. The kind numbers
 > and wire format may change. Pin an exact version and review the suite before
 > relying on it in production.
 
 A player enters a matchmaking pool by publishing a signed **Open Challenge**
-(kind `6418`) that names a matchmaker, an arbiter, and optionally a timestamper
+(kind `3418`) that names a matchmaker, an arbiter, and optionally a timestamper
 (absent → the session is self-timed, the default), and carries the session
 terms (game, per-role variant preferences, time control, opponent filter) — but
 no opponent. A designated **matchmaker** pairs two compatible Open
-Challenges by publishing a **Pairing** (kind `6419`), without any acceptance
+Challenges by publishing a **Pairing** (kind `3419`), without any acceptance
 signature from the players: their consent is pre-committed in their Open
 Challenges, and a Pairing is binding only if it respects both.
 
@@ -27,13 +27,13 @@ game or parties an application designates. Those are a higher layer's concern
 ## Pipeline
 
 ```text
-kind 6418 event ──parse──▶ OpenChallenge ─┐
-kind 6418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─▶ Compatible{variants}
+kind 3418 event ──parse──▶ OpenChallenge ─┐
+kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─▶ Compatible{variants}
                                                                      │
-                                                          PairingBuilder ──▶ kind 6419
+                                                          PairingBuilder ──▶ kind 3419
 ```
 
-- **`open_challenge`** — `OpenChallenge::parse` turns a kind-`6418` event into a
+- **`open_challenge`** — `OpenChallenge::parse` turns a kind-`3418` event into a
   typed, validated value (the event-local semantic constraints, decidable from
   the event alone).
 - **`compatibility`** — `evaluate(a, b, facts)` decides whether two Open
@@ -79,7 +79,7 @@ impl Facts for MyFacts {
     ) -> bool { false }
 }
 
-// `a` and `b` are two parsed kind-6418 events (OpenChallenge::parse).
+// `a` and `b` are two parsed kind-3418 events (OpenChallenge::parse).
 fn pair(a: &OpenChallenge, b: &OpenChallenge) {
     if let Compatibility::Compatible { a_variant, b_variant } = evaluate(a, b, &MyFacts) {
         let mut builder = PairingBuilder::new(a, b);
@@ -95,15 +95,15 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge) {
 
 ## Consent constraints
 
-`evaluate` encodes the consent constraints of kind `6419` that are decidable
+`evaluate` encodes the consent constraints of kind `3419` that are decidable
 from the two Open Challenges plus the resolved facts: distinct signers, a common
 matchmaker / arbiter / timestamper, a common game, an identical time control, a
 satisfiable variant resolution, and each player satisfying the other's filter. A
 `following` filter binds against the filterer's contact list; a `rating` filter
 binds against the rating authority the filterer **pins** in their Open Challenge
-(an authority pubkey plus the attestation kind, `6426` Elo or `6427` Glicko-2).
+(an authority pubkey plus the attestation kind, `3426` Elo or `3427` Glicko-2).
 The comparison pool follows the pinned authority's **published pool policy**
-(kind `6419` §Consent constraints): under a per-`(game, variant)` policy (the
+(kind `3419` §Consent constraints): under a per-`(game, variant)` policy (the
 rating specifications' default) the filter is satisfiable only for a
 same-variant pairing; under a per-game policy (e.g. Sashité's `sanki` authority)
 it binds across any variant combination, resolved or free. An unknown policy is

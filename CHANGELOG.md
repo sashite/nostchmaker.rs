@@ -4,6 +4,31 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING — the Sashité kind numbers moved out of NIP-90's reserved range.**
+  `KIND_OPEN_CHALLENGE` is now `3418`, `KIND_PAIRING` `3419`,
+  `KIND_ELO_RATING_ATTESTATION` `3426`, `KIND_GLICKO2_RATING_ATTESTATION`
+  `3427`; the `filter rating` tag's authority-kind values follow. The constants'
+  names and types are unchanged, so this compiles anywhere it compiled before —
+  and it will not interoperate with anything still on `6xxx`, which is the
+  point.
+
+  [NIP-90](https://github.com/nostr-protocol/nips/blob/master/90.md) reserves
+  `5000-7000` in one block for data vending machines and pairs a job request
+  with its result at a fixed offset of a thousand, so an Open Challenge at
+  `6418` *was* the result of job request `5418` to anything that knows NIP-90.
+  The suite documents the move in `web-specs.md` README §Kind numbers.
+
+  **A consumer must move with it.** The kind is what a relay filters on, so a
+  matchmaker built against the old constants and one built against these do not
+  see each other's pool at all. `sashite-nostr-matchmaker-bot` moves in the same
+  wave; its 34 tests pass against this crate unchanged, as do the 51 here.
+
+  Entries below keep the numbers that were in force when they were written.
+
 ## [0.4.0] — 2026-07-09
 
 Aligns the `rating` filter's comparison pool with the revised kind `6419`

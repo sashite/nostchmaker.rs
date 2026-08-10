@@ -1,11 +1,11 @@
 //! Kind numbers, tag names, marker strings, and enumerated vocabularies of the
-//! Open Challenge (`6418`) / Pairing (`6419`) protocol.
+//! Open Challenge (`3418`) / Pairing (`3419`) protocol.
 
 /// Kind of an Open Challenge event — a player entering the matchmaking pool.
-pub const KIND_OPEN_CHALLENGE: u16 = 6418;
+pub const KIND_OPEN_CHALLENGE: u16 = 3418;
 
 /// Kind of a Pairing event — a matchmaker binding two Open Challenges.
-pub const KIND_PAIRING: u16 = 6419;
+pub const KIND_PAIRING: u16 = 3419;
 
 /// `e`-tag marker on a Pairing referencing one of the two paired Open Challenges.
 pub const MARKER_OPEN_CHALLENGE: &str = "open_challenge";
@@ -40,11 +40,11 @@ pub const FILTER_RATING: &str = "rating";
 
 /// Kind of an Elo Rating Attestation — a pinnable rating source for the `rating`
 /// filter mode.
-pub const KIND_ELO_RATING_ATTESTATION: u16 = 6426;
+pub const KIND_ELO_RATING_ATTESTATION: u16 = 3426;
 
 /// Kind of a Glicko-2 Rating Attestation — a pinnable rating source for the
 /// `rating` filter mode.
-pub const KIND_GLICKO2_RATING_ATTESTATION: u16 = 6427;
+pub const KIND_GLICKO2_RATING_ATTESTATION: u16 = 3427;
 
 /// `game` tag name.
 pub const TAG_GAME: &str = "game";

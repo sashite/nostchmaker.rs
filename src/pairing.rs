@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Build a kind-`6419` Pairing from two compatible Open Challenges.
+//! Build a kind-`3419` Pairing from two compatible Open Challenges.
 //!
 //! [`PairingBuilder`] is the write path. It is **infallible**: tags are built
 //! with the verbatim [`Tag::custom`] constructor, and the terminal
@@ -28,7 +28,7 @@ use crate::constants::{
 };
 use crate::open_challenge::{OpenChallenge, TimeControlPeriod};
 
-/// A builder for a Pairing (kind `6419`) over two compatible Open Challenges.
+/// A builder for a Pairing (kind `3419`) over two compatible Open Challenges.
 ///
 /// Set the per-player variants (required for multi-variant games such as
 /// `sanki`) and an optional relay hint, then call
@@ -184,7 +184,7 @@ mod tests {
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
-        let event = EventBuilder::new(Kind::Custom(6418), "")
+        let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
             .sign_with_keys(signer)
@@ -203,7 +203,7 @@ mod tests {
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
-        let event = EventBuilder::new(Kind::Custom(6418), "")
+        let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
             .sign_with_keys(signer)
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_self_timed_pairing_designates_no_timestamper() {
-        // Two self-timed challenges (no timestamper) pair into a 6419 that likewise
+        // Two self-timed challenges (no timestamper) pair into a 3419 that likewise
         // designates none — the session runs self-timed.
         let mm = Keys::generate();
         let arb = Keys::generate();

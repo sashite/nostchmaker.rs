@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Parse a kind-`6418` event into a typed, validated [`OpenChallenge`].
+//! Parse a kind-`3418` event into a typed, validated [`OpenChallenge`].
 //!
 //! [`OpenChallenge::parse`] enforces the event-local semantic constraints of
-//! kind `6418` (§Semantic constraints, decidable from the event alone) and
+//! kind `3418` (§Semantic constraints, decidable from the event alone) and
 //! returns the first violated rule as a [`ParseError`]. It performs a
 //! *structural* check only; the caller MUST also verify the event's signature
 //! (`event.verify()`) per NIP-01, and enforce any relay-advertised NIP-13
@@ -21,20 +21,20 @@ use crate::error::ParseError;
 
 /// The rating system a `rating` filter pins as its authoritative source.
 ///
-/// The on-wire value is the attestation kind: `6426` for Elo, `6427` for
+/// The on-wire value is the attestation kind: `3426` for Elo, `3427` for
 /// Glicko-2. A filter pins both a rating-authority pubkey and one of these
 /// kinds, so the rating it compares is objective and retroactively verifiable
 /// (rating attestations are regular, persistent events).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RatingKind {
-    /// Elo Rating Attestation (kind `6426`).
+    /// Elo Rating Attestation (kind `3426`).
     Elo,
-    /// Glicko-2 Rating Attestation (kind `6427`).
+    /// Glicko-2 Rating Attestation (kind `3427`).
     Glicko2,
 }
 
 impl RatingKind {
-    /// The attestation kind number (`6426` or `6427`).
+    /// The attestation kind number (`3426` or `3427`).
     #[must_use]
     pub const fn as_u16(self) -> u16 {
         match self {
@@ -43,12 +43,12 @@ impl RatingKind {
         }
     }
 
-    /// Parses the on-wire kind string (`"6426"` / `"6427"`), or `None`.
+    /// Parses the on-wire kind string (`"3426"` / `"3427"`), or `None`.
     #[must_use]
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "6426" => Some(Self::Elo),
-            "6427" => Some(Self::Glicko2),
+            "3426" => Some(Self::Elo),
+            "3427" => Some(Self::Glicko2),
             _ => None,
         }
     }
@@ -73,14 +73,14 @@ pub enum Filter {
         /// The rating authority whose attestations are authoritative for this
         /// filter.
         authority: PublicKey,
-        /// The rating system consumed (Elo `6426` or Glicko-2 `6427`).
+        /// The rating system consumed (Elo `3426` or Glicko-2 `3427`).
         kind: RatingKind,
     },
 }
 
 /// One period of a time-control configuration.
 ///
-/// Values are validated for shape (per kind `6420` §Match-terms tags) but not
+/// Values are validated for shape (per kind `3420` §Match-terms tags) but not
 /// interpreted: time accounting is the arbiter's rule system's concern. Two
 /// configurations are comparable for equality, which is what pairing requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +110,7 @@ impl TimeControlPeriod {
     }
 }
 
-/// A parsed, structurally valid Open Challenge (kind `6418`).
+/// A parsed, structurally valid Open Challenge (kind `3418`).
 ///
 /// Constructed by [`OpenChallenge::parse`]. Per-player variant preferences are
 /// keyed by role (`self` / `opponent`) because the opponent is anonymous at
@@ -131,9 +131,9 @@ pub struct OpenChallenge {
 }
 
 impl OpenChallenge {
-    /// Parses and validates a kind-`6418` event.
+    /// Parses and validates a kind-`3418` event.
     ///
-    /// Checks the event-local semantic constraints (kind `6418` §Semantic
+    /// Checks the event-local semantic constraints (kind `3418` §Semantic
     /// constraints) in order, returning the first violated rule. A `nonce` tag
     /// is required to be present, but its NIP-13 difficulty is not checked here
     /// (that is a relay/consumer policy).
@@ -594,7 +594,7 @@ mod tests {
         let id = "a".repeat(64);
         let sig = "b".repeat(128);
         let json = format!(
-            r#"{{"id":"{id}","pubkey":"{signer_hex}","created_at":1000,"kind":6418,"content":"","sig":"{sig}","tags":{tags_json}}}"#
+            r#"{{"id":"{id}","pubkey":"{signer_hex}","created_at":1000,"kind":3418,"content":"","sig":"{sig}","tags":{tags_json}}}"#
         );
         Event::from_json(&json).unwrap()
     }
@@ -673,7 +673,7 @@ mod tests {
                 "rating",
                 "200",
                 &authority.public_key().to_hex(),
-                "6427",
+                "3427",
             ])
             .unwrap(),
         );
@@ -699,7 +699,7 @@ mod tests {
                 "rating",
                 "50",
                 &authority.public_key().to_hex(),
-                "6426",
+                "3426",
             ])
             .unwrap(),
         );
@@ -718,7 +718,7 @@ mod tests {
     fn rejects_rating_filter_with_invalid_authority() {
         let parties = parties();
         let mut tags = valid_tags(&parties);
-        tags.push(Tag::parse(["filter", "rating", "200", "not-a-pubkey", "6427"]).unwrap());
+        tags.push(Tag::parse(["filter", "rating", "200", "not-a-pubkey", "3427"]).unwrap());
         let event = signed(&parties, "", tags);
         assert_eq!(
             OpenChallenge::parse(&event),
@@ -950,8 +950,8 @@ mod tests {
         for bad in [
             vec!["filter", "rating"],                              // wrong arity (2)
             vec!["filter", "rating", "200"], // wrong arity (3, no authority/kind)
-            vec!["filter", "rating", "0", &authority, "6427"], // zero delta
-            vec!["filter", "rating", "10000", &authority, "6427"], // delta too large (5 digits)
+            vec!["filter", "rating", "0", &authority, "3427"], // zero delta
+            vec!["filter", "rating", "10000", &authority, "3427"], // delta too large (5 digits)
             vec!["filter", "everyone", "x"], // extra value on everyone
         ] {
             let mut tags = valid_tags(&parties);

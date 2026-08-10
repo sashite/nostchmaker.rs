@@ -3,7 +3,7 @@
 //! Decide whether two [`OpenChallenge`]s can be paired, and resolve each
 //! player's variant.
 //!
-//! [`evaluate`] encodes the consent constraints of kind `6419` that are
+//! [`evaluate`] encodes the consent constraints of kind `3419` that are
 //! decidable from the two challenges plus externally resolved [`Facts`]:
 //! distinct signers (constraint 1), a common matchmaker / arbiter / timestamper
 //! (constraints 2, 4, 5), a common game (6), an identical time control (8), a
@@ -18,7 +18,7 @@
 //! attestation), the Pairing event's own shape (constraints 3, 11, 12, checked
 //! when validating a built Pairing), and any operational policy such as a game
 //! allow-list or NIP-51 mute lists. Constraint 11 (the matchmaker differs from
-//! both players) follows from constraint 2 together with kind `6418`'s own
+//! both players) follows from constraint 2 together with kind `3418`'s own
 //! constraint 1, so it is not re-checked here.
 
 use nostr::PublicKey;
@@ -29,7 +29,7 @@ use crate::open_challenge::{Filter, OpenChallenge, RatingKind};
 /// ratings are scoped (see the rating specifications §Rating pool).
 ///
 /// The `rating` filter's comparison pool follows the **pinned authority's**
-/// published policy (kind `6419` §Consent constraints): pinning a source
+/// published policy (kind `3419` §Consent constraints): pinning a source
 /// implies adopting its pool semantics. The policy determines whether a
 /// `rating` filter can bind a multi-variant or variant-free pairing at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub enum RatingPool<'a> {
 /// no I/O.
 ///
 /// The relation queries are **anchored at the Pairing's canonical timing** by
-/// contract (kind `6419` §Consent constraints; [Race Resolution] §Canonical
+/// contract (kind `3419` §Consent constraints; [Race Resolution] §Canonical
 /// timing): the implementer evaluates the follow relation against the
 /// filterer's contact list as it stood at the anchor, and a rating against the
 /// most recent attestation by the pinned authority with `created_at` at or
@@ -158,7 +158,7 @@ pub enum Incompatibility {
     /// A `rating` filter applies under a **per-(game, variant)** pool policy but
     /// the two players' resolved variants differ: a multi-variant pairing has no
     /// shared per-variant pool to compare in, so the pair is rejected (kind
-    /// `6419` §Consent constraints). (Under a per-game policy the single game
+    /// `3419` §Consent constraints). (Under a per-game policy the single game
     /// pool is shared regardless of the variants.)
     RatingNeedsSameVariant,
     /// A `rating` filter applies but the pinned authority's pool policy is
@@ -277,7 +277,7 @@ fn satisfies(
             kind,
         } => {
             // The comparison pool follows the pinned authority's published pool
-            // policy (kind `6419` §Consent constraints): per-game — the single
+            // policy (kind `3419` §Consent constraints): per-game — the single
             // game pool, whatever the variants; per-(game, variant) — the shared
             // variant's pool, which requires a same-variant resolution. An
             // unknown policy is fail-closed.
@@ -384,7 +384,7 @@ mod tests {
     /// A `rating` filter tag pinning a fresh authority (Glicko-2).
     fn rating_filter(max_delta: &str) -> Tag {
         let authority = Keys::generate().public_key().to_hex();
-        Tag::parse(["filter", "rating", max_delta, &authority, "6427"]).unwrap()
+        Tag::parse(["filter", "rating", max_delta, &authority, "3427"]).unwrap()
     }
 
     fn p(keys: &Keys, role: &str) -> Tag {
@@ -408,7 +408,7 @@ mod tests {
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
-        let event = EventBuilder::new(Kind::Custom(6418), "")
+        let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
             .sign_with_keys(signer)
@@ -427,7 +427,7 @@ mod tests {
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
-        let event = EventBuilder::new(Kind::Custom(6418), "")
+        let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
             .sign_with_keys(signer)
