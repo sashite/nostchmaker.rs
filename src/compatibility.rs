@@ -21,7 +21,7 @@
 //! both players) follows from constraint 2 together with kind `3418`'s own
 //! constraint 1, so it is not re-checked here.
 
-use nostr::PublicKey;
+use nostr::key::PublicKey;
 
 use crate::open_challenge::{Filter, OpenChallenge, RatingKind};
 
@@ -411,7 +411,7 @@ mod tests {
         let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(signer)
+            .finalize(signer)
             .unwrap();
         OpenChallenge::parse(&event).unwrap()
     }
@@ -430,7 +430,7 @@ mod tests {
         let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(signer)
+            .finalize(signer)
             .unwrap();
         OpenChallenge::parse(&event).unwrap()
     }

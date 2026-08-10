@@ -9,7 +9,8 @@
 //! (`event.verify()`) per NIP-01, and enforce any relay-advertised NIP-13
 //! difficulty (a deployment policy this primitive does not know).
 
-use nostr::{Event, EventId, Kind, PublicKey, Tag};
+use nostr::event::{Event, EventId, Kind, Tag};
+use nostr::key::PublicKey;
 
 use crate::constants::{
     FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_ELO_RATING_ATTESTATION,
@@ -582,7 +583,7 @@ mod tests {
         EventBuilder::new(Kind::Custom(KIND), content)
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(&parties.signer)
+            .finalize(&parties.signer)
             .unwrap()
     }
 
@@ -765,7 +766,7 @@ mod tests {
         let event = EventBuilder::new(Kind::Custom(1), "")
             .tags(valid_tags(&parties))
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(&parties.signer)
+            .finalize(&parties.signer)
             .unwrap();
         assert_eq!(OpenChallenge::parse(&event), Err(ParseError::WrongKind(1)));
     }

@@ -4,6 +4,44 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-08-10
+
+### Changed
+
+- **BREAKING — `nostr` 0.44 → 0.45.** The event types this crate takes and
+  returns (`Event`, `EventBuilder`, `Tag`, `EventId`, `Kind`, `PublicKey`,
+  `RelayUrl`) are `nostr`'s, so its version line is part of this crate's API: a
+  consumer on `nostr` 0.44 cannot hand its `Event` to `OpenChallenge::parse`
+  here. Both move in the same step.
+
+  The reason to move is
+  [RUSTSEC-2026-0243](https://rustsec.org/advisories/RUSTSEC-2026-0243):
+  `nostr-relay-pool` is no longer maintained as a standalone crate, its
+  functionality having been folded into `nostr-sdk` 0.45. That advisory is
+  against the *services*, not this crate — there is no client and no transport
+  here — but they cannot move to `nostr-sdk` 0.45 while this primitive still
+  hands them 0.44 types.
+
+  What changed in the surface this crate uses:
+
+  - Types are no longer re-exported at the crate root; they come from their
+    modules (`nostr::event::{Event, EventBuilder, Tag, EventId, Kind}`,
+    `nostr::key::PublicKey`, `nostr::types::RelayUrl`).
+  - `TagKind` is gone (per-NIP tag enums replace `TagStandard`). A tag name is
+    now just a string, which is what the suite's multi-letter tags (`game`,
+    `variant`, `time_control`) always were: `Tag::custom(TAG_GAME, …)` rather
+    than `Tag::custom(TagKind::custom(TAG_GAME), …)`. Parsing already read raw
+    slices and is untouched.
+  - `EventBuilder::sign_with_keys` is gone; building and signing in one step is
+    `finalize` (`FinalizeEvent`), and signing is synchronous now.
+  - `Keys::generate` sits behind the new `os-rng` feature. Only the test
+    fixtures generate keys — the primitive itself never does — so the feature is
+    asked for as a **dev**-dependency, and nothing a dependent compiles gets
+    wider.
+
+  No behaviour change, no wire-format change, no constant change: the 51 tests
+  pass unchanged.
+
 ## [0.5.0] — 2026-08-10
 
 ### Changed

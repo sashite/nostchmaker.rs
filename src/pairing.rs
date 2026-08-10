@@ -20,7 +20,9 @@
 //! yielding a non-conforming Pairing. Designate distinct keys for these roles
 //! (which also strengthens the trust model).
 
-use nostr::{EventBuilder, EventId, Kind, PublicKey, RelayUrl, Tag, TagKind};
+use nostr::event::{EventBuilder, EventId, Kind, Tag};
+use nostr::key::PublicKey;
+use nostr::types::RelayUrl;
 
 use crate::constants::{
     KIND_PAIRING, MARKER_OPEN_CHALLENGE, ROLE_ARBITER, ROLE_PLAYER, ROLE_TIMESTAMPER, TAG_GAME,
@@ -92,7 +94,7 @@ impl<'a> PairingBuilder<'a> {
             p_tag(self.b.signer(), hint, ROLE_PLAYER),
             p_tag(self.a.arbiter(), hint, ROLE_ARBITER),
             // Game (shared by both Open Challenges).
-            Tag::custom(TagKind::custom(TAG_GAME), [self.a.game().to_string()]),
+            Tag::custom(TAG_GAME, [self.a.game().to_string()]),
         ];
 
         // The timestamper is optional: designated only when the (compatible) pair named
@@ -122,21 +124,18 @@ impl<'a> PairingBuilder<'a> {
 /// is kept present (empty when unset) so the marker stays in the fourth slot.
 fn e_tag(event_id: EventId, relay_hint: Option<&RelayUrl>, marker: &str) -> Tag {
     let relay = relay_hint.map(RelayUrl::to_string).unwrap_or_default();
-    Tag::custom(TagKind::e(), [event_id.to_hex(), relay, marker.to_string()])
+    Tag::custom("e", [event_id.to_hex(), relay, marker.to_string()])
 }
 
 /// Builds a `p` tag `["p", <pubkey>, <relay-or-empty>, <role>]`.
 fn p_tag(pubkey: PublicKey, relay_hint: Option<&RelayUrl>, role: &str) -> Tag {
     let relay = relay_hint.map(RelayUrl::to_string).unwrap_or_default();
-    Tag::custom(TagKind::p(), [pubkey.to_hex(), relay, role.to_string()])
+    Tag::custom("p", [pubkey.to_hex(), relay, role.to_string()])
 }
 
 /// Builds a pubkey-based `variant` tag `["variant", <player_pubkey>, <variant>]`.
 fn variant_tag(player: PublicKey, variant: &str) -> Tag {
-    Tag::custom(
-        TagKind::custom(TAG_VARIANT),
-        [player.to_hex(), variant.to_string()],
-    )
+    Tag::custom(TAG_VARIANT, [player.to_hex(), variant.to_string()])
 }
 
 /// Rebuilds a `time_control` tag from a period, omitting trailing fields.
@@ -148,7 +147,7 @@ fn time_control_tag(period: &TimeControlPeriod) -> Tag {
             values.push(plies.to_string());
         }
     }
-    Tag::custom(TagKind::custom(TAG_TIME_CONTROL), values)
+    Tag::custom(TAG_TIME_CONTROL, values)
 }
 
 #[cfg(test)]
@@ -187,7 +186,7 @@ mod tests {
         let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(signer)
+            .finalize(signer)
             .unwrap();
         OpenChallenge::parse(&event).unwrap()
     }
@@ -206,7 +205,7 @@ mod tests {
         let event = EventBuilder::new(Kind::Custom(3418), "")
             .tags(tags)
             .custom_created_at(Timestamp::from(1000))
-            .sign_with_keys(signer)
+            .finalize(signer)
             .unwrap();
         OpenChallenge::parse(&event).unwrap()
     }
@@ -261,7 +260,7 @@ mod tests {
             .b_variant("chess")
             .relay_hint(relay())
             .to_event_builder()
-            .sign_with_keys(&mm)
+            .finalize(&mm)
             .unwrap();
 
         pairing.verify().unwrap();
@@ -336,7 +335,7 @@ mod tests {
 
         let pairing = PairingBuilder::new(&a, &b)
             .to_event_builder()
-            .sign_with_keys(&mm)
+            .finalize(&mm)
             .unwrap();
 
         pairing.verify().unwrap();
@@ -369,7 +368,7 @@ mod tests {
 
         let pairing = PairingBuilder::new(&a, &b)
             .to_event_builder()
-            .sign_with_keys(&mm)
+            .finalize(&mm)
             .unwrap();
 
         assert!(tags_named(&pairing, "variant").is_empty());
@@ -395,7 +394,7 @@ mod tests {
 
         let pairing = PairingBuilder::new(&a, &b)
             .to_event_builder()
-            .sign_with_keys(&mm)
+            .finalize(&mm)
             .unwrap();
 
         // The relay slot is empty but the marker stays in the fourth position.

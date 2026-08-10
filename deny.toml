@@ -8,11 +8,12 @@
 [advisories]
 # RUSTSEC advisory database. Any matching advisory fails the check. Specific
 # advisory IDs may be accepted here, each with a justification.
-ignore = [
-    # `instant` is unmaintained (not vulnerable): pulled transitively by `nostr`,
-    # with no fix available at our layer. Re-evaluate when upgrading `nostr`.
-    "RUSTSEC-2024-0384",
-]
+#
+# The `instant` exception (RUSTSEC-2024-0384) went out with `nostr` 0.45: it
+# said to re-evaluate on the next `nostr` upgrade, and the crate has left the
+# graph. A stale exception is worse than none — it keeps silencing an advisory
+# nobody is checking still applies.
+ignore = []
 yanked = "deny"
 
 [licenses]

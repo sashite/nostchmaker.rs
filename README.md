@@ -48,7 +48,7 @@ kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
 ```rust
 use nostchmaker::compatibility::{evaluate, Compatibility, Facts, PoolPolicy, RatingPool};
 use nostchmaker::open_challenge::{OpenChallenge, RatingKind};
-use nostr::PublicKey;
+use nostr::key::PublicKey;
 use nostchmaker::pairing::PairingBuilder;
 
 // The consumer resolves the external facts the filters need, anchored at the
@@ -130,7 +130,7 @@ It is deliberately **silent** on the rest, which a higher layer enforces:
 
 ## Status and MSRV
 
-`nostr` `0.44`. Developed and tested on Rust `1.96`. See the status note near the
+`nostr` `0.45`. Developed and tested on Rust `1.96`. See the status note near the
 top of this document regarding the proposed NIP and the tentative kind numbers.
 
 ## License
