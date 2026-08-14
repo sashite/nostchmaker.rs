@@ -14,9 +14,10 @@ use nostr::key::PublicKey;
 
 use crate::constants::{
     FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_ELO_RATING_ATTESTATION,
-    KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, ROLE_ARBITER, ROLE_MATCHMAKER,
-    ROLE_TIMESTAMPER, SELECTOR_OPPONENT, SELECTOR_SELF, TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME,
-    TAG_NONCE, TAG_TIME_CONTROL, TAG_VARIANT,
+    KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, POOL_SCOPE_PERGAME,
+    POOL_SCOPE_PERVARIANT, ROLE_ARBITER, ROLE_MATCHMAKER, ROLE_TIMESTAMPER, SELECTOR_OPPONENT,
+    SELECTOR_SELF, TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_TIME_CONTROL,
+    TAG_TIMING_RELAY, TAG_VARIANT,
 };
 use crate::error::ParseError;
 
@@ -66,8 +67,10 @@ pub enum Filter {
     Everyone,
     /// Only opponents the signer follows (NIP-02).
     Following,
-    /// Only opponents within `max_delta` rating points (1..=9999), as rated by
-    /// the pinned `authority` under the pinned rating `kind`.
+    /// Only opponents within `max_delta` rating points (1..=1000), as rated by
+    /// the pinned `authority` under the pinned rating `kind`, compared in the
+    /// pool the filter's declared `scope` selects (kind `3418` §Match-terms
+    /// tags — decision M-9).
     Rating {
         /// The maximum admissible rating difference.
         max_delta: u16,
@@ -76,7 +79,22 @@ pub enum Filter {
         authority: PublicKey,
         /// The rating system consumed (Elo `3426` or Glicko-2 `3427`).
         kind: RatingKind,
+        /// The declared pool scope the ratings are compared in.
+        scope: PoolScope,
     },
+}
+
+/// The pool scope a `rating` filter declares (its sixth element): which pool
+/// the two players' ratings are compared in. Declared by the filter's signer,
+/// so satisfaction is objective from public data alone (decision M-9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolScope {
+    /// One pool per game, unifying its variants: the filter binds across any
+    /// variant combination.
+    Pergame,
+    /// One pool per (game, variant): the filter is satisfiable only by a
+    /// same-variant pairing.
+    Pervariant,
 }
 
 /// One period of a time-control configuration.
@@ -129,6 +147,7 @@ pub struct OpenChallenge {
     time_control: Vec<TimeControlPeriod>,
     filter: Filter,
     accept_until: u64,
+    timing_relays: std::collections::BTreeSet<String>,
 }
 
 impl OpenChallenge {
@@ -177,6 +196,16 @@ impl OpenChallenge {
         // Constraint 7 — exactly one nonce tag (difficulty enforced elsewhere).
         require_single_nonce(event)?;
 
+        // Timing designation — exactly one of the two forms: a timestamper
+        // (attested mode) XOR one or more `timing_relay` tags (self-timed mode;
+        // Canonical Timing NIP §Timing modes and mode selection).
+        let timing_relays = parse_timing_relays(event);
+        match (timestamper.is_some(), !timing_relays.is_empty()) {
+            (false, false) => return Err(ParseError::NoTimingDesignation),
+            (true, true) => return Err(ParseError::ConflictingTimingDesignation),
+            _ => {}
+        }
+
         Ok(Self {
             id: event.id,
             signer: event.pubkey,
@@ -189,6 +218,7 @@ impl OpenChallenge {
             time_control,
             filter,
             accept_until,
+            timing_relays,
         })
     }
 
@@ -251,6 +281,14 @@ impl OpenChallenge {
     #[must_use]
     pub fn filter(&self) -> Filter {
         self.filter
+    }
+
+    /// The designated timing relays (self-timed mode), as a set; empty in
+    /// attested mode. Two Open Challenges are pairable only if their sets are
+    /// identical (kind `3419` §Consent constraints, constraint 5).
+    #[must_use]
+    pub fn timing_relays(&self) -> &std::collections::BTreeSet<String> {
+        &self.timing_relays
     }
 
     /// The pool-entry deadline (a Unix timestamp in seconds).
@@ -417,7 +455,7 @@ fn filter_from_slice(slice: &[String]) -> Result<Filter, ParseError> {
     match slice.get(1).map(String::as_str) {
         Some(FILTER_EVERYONE) if slice.len() == 2 => Ok(Filter::Everyone),
         Some(FILTER_FOLLOWING) if slice.len() == 2 => Ok(Filter::Following),
-        Some(FILTER_RATING) if slice.len() == 5 => {
+        Some(FILTER_RATING) if slice.len() == 6 => {
             let raw_delta = slice.get(2).map(String::as_str).unwrap_or_default();
             let max_delta = parse_max_delta(raw_delta).ok_or(ParseError::MalformedFilter)?;
 
@@ -429,10 +467,18 @@ fn filter_from_slice(slice: &[String]) -> Result<Filter, ParseError> {
             let kind = RatingKind::parse(raw_kind)
                 .ok_or_else(|| ParseError::InvalidRatingKind(raw_kind.to_string()))?;
 
+            let raw_scope = slice.get(5).map(String::as_str).unwrap_or_default();
+            let scope = match raw_scope {
+                POOL_SCOPE_PERGAME => PoolScope::Pergame,
+                POOL_SCOPE_PERVARIANT => PoolScope::Pervariant,
+                other => return Err(ParseError::InvalidPoolScope(other.to_string())),
+            };
+
             Ok(Filter::Rating {
                 max_delta,
                 authority,
                 kind,
+                scope,
             })
         }
         Some(FILTER_EVERYONE | FILTER_FOLLOWING | FILTER_RATING) => {
@@ -444,6 +490,21 @@ fn filter_from_slice(slice: &[String]) -> Result<Filter, ParseError> {
 }
 
 /// Validates `^[1-9][0-9]{0,3}$` and parses it (1..=9999).
+fn parse_timing_relays(event: &Event) -> std::collections::BTreeSet<String> {
+    event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let s = tag.as_slice();
+            if s.first().map(String::as_str) == Some(TAG_TIMING_RELAY) {
+                s.get(1).cloned()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 fn parse_max_delta(value: &str) -> Option<u16> {
     let bytes = value.as_bytes();
     let first = bytes.first()?;
@@ -456,7 +517,10 @@ fn parse_max_delta(value: &str) -> Option<u16> {
     if !bytes.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    value.parse::<u16>().ok()
+    // The pattern admits up to 9999; the shared bound is 1..=1000 (kind `3418`
+    // §Match-terms tags — decision M-15).
+    let delta: u16 = value.parse().ok()?;
+    (1..=1000).contains(&delta).then_some(delta)
 }
 
 fn parse_accept_until(event: &Event) -> Result<u64, ParseError> {
@@ -537,7 +601,7 @@ mod tests {
         clippy::indexing_slicing
     )]
 
-    use super::{Filter, OpenChallenge, RatingKind};
+    use super::{Filter, OpenChallenge, PoolScope, RatingKind};
     use crate::constants::KIND_OPEN_CHALLENGE;
     use crate::error::ParseError;
     use nostr::prelude::*;
@@ -633,9 +697,11 @@ mod tests {
             !(t.as_slice().first().map(String::as_str) == Some("p")
                 && t.as_slice().get(3).map(String::as_str) == Some("timestamper"))
         });
+        tags.push(Tag::parse(["timing_relay", "wss://relay.example.com"]).unwrap());
         let event = signed(&parties, "", tags);
         let oc = OpenChallenge::parse(&event).expect("self-timed challenge is valid");
         assert_eq!(oc.timestamper(), None);
+        assert!(oc.timing_relays().contains("wss://relay.example.com"));
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
         assert_eq!(oc.arbiter(), parties.arbiter.public_key());
     }
@@ -675,6 +741,7 @@ mod tests {
                 "200",
                 &authority.public_key().to_hex(),
                 "3427",
+                "pervariant",
             ])
             .unwrap(),
         );
@@ -685,6 +752,7 @@ mod tests {
                 max_delta: 200,
                 authority: authority.public_key(),
                 kind: RatingKind::Glicko2,
+                scope: PoolScope::Pervariant,
             }
         );
     }
@@ -701,6 +769,7 @@ mod tests {
                 "50",
                 &authority.public_key().to_hex(),
                 "3426",
+                "pergame",
             ])
             .unwrap(),
         );
@@ -711,6 +780,7 @@ mod tests {
                 max_delta: 50,
                 authority: authority.public_key(),
                 kind: RatingKind::Elo,
+                scope: PoolScope::Pergame,
             }
         );
     }
@@ -719,7 +789,9 @@ mod tests {
     fn rejects_rating_filter_with_invalid_authority() {
         let parties = parties();
         let mut tags = valid_tags(&parties);
-        tags.push(Tag::parse(["filter", "rating", "200", "not-a-pubkey", "3427"]).unwrap());
+        tags.push(
+            Tag::parse(["filter", "rating", "200", "not-a-pubkey", "3427", "pergame"]).unwrap(),
+        );
         let event = signed(&parties, "", tags);
         assert_eq!(
             OpenChallenge::parse(&event),
@@ -739,6 +811,7 @@ mod tests {
                 "200",
                 &authority.public_key().to_hex(),
                 "9999",
+                "pergame",
             ])
             .unwrap(),
         );

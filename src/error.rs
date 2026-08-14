@@ -68,6 +68,16 @@ pub enum ParseError {
     /// A `rating` filter's pinned rating-authority pubkey (fourth element) does
     /// not parse.
     InvalidRatingAuthority,
+    /// A `rating` filter's pool scope (sixth element) is neither `pergame` nor
+    /// `pervariant`. Carries the offending value.
+    InvalidPoolScope(String),
+    /// The event carries neither a `timestamper` designation nor any
+    /// `timing_relay` tag: no timing designation, no mode (Canonical Timing NIP
+    /// §Timing modes and mode selection).
+    NoTimingDesignation,
+    /// The event carries both a `timestamper` designation and `timing_relay`
+    /// tags: the two designation forms are exclusive.
+    ConflictingTimingDesignation,
     /// A `rating` filter's pinned rating kind (fifth element) is neither `3426`
     /// (Elo) nor `3427` (Glicko-2). Carries the offending value.
     InvalidRatingKind(String),
@@ -118,6 +128,15 @@ impl fmt::Display for ParseError {
             }
             Self::InvalidFilterMode(mode) => write!(f, "invalid filter mode: {mode:?}"),
             Self::MalformedFilter => f.write_str("malformed `filter` tag for its mode"),
+            Self::InvalidPoolScope(scope) => {
+                write!(f, "invalid rating pool scope: {scope:?} (expected `pergame` or `pervariant`)")
+            }
+            Self::NoTimingDesignation => f.write_str(
+                "no timing designation (neither timestamper nor timing_relay)",
+            ),
+            Self::ConflictingTimingDesignation => f.write_str(
+                "both a timestamper and timing_relay tags (the designations are exclusive)",
+            ),
             Self::InvalidRatingAuthority => {
                 f.write_str("the `rating` filter's pinned authority pubkey is invalid")
             }

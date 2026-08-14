@@ -26,7 +26,7 @@ use nostr::types::RelayUrl;
 
 use crate::constants::{
     KIND_PAIRING, MARKER_OPEN_CHALLENGE, ROLE_ARBITER, ROLE_PLAYER, ROLE_TIMESTAMPER, TAG_GAME,
-    TAG_TIME_CONTROL, TAG_VARIANT,
+    TAG_TIME_CONTROL, TAG_TIMING_RELAY, TAG_VARIANT,
 };
 use crate::open_challenge::{OpenChallenge, TimeControlPeriod};
 
@@ -102,6 +102,12 @@ impl<'a> PairingBuilder<'a> {
         // (compatibility rejects a timestamper mismatch), so `a`'s value is canonical.
         if let Some(timestamper) = self.a.timestamper() {
             tags.push(p_tag(timestamper, hint, ROLE_TIMESTAMPER));
+        }
+        // Self-timed: the Pairing mirrors the (identical — compatibility
+        // rejects a mismatch) `timing_relay` set of the two Open Challenges
+        // (kind `3419` §Consent constraints, constraint 5).
+        for url in self.a.timing_relays() {
+            tags.push(Tag::custom(TAG_TIMING_RELAY, [url.clone()]));
         }
 
         // Per-player resolved variants (pubkey-based), when supplied.
@@ -198,7 +204,11 @@ mod tests {
         arbiter: &Keys,
         terms: Vec<Tag>,
     ) -> OpenChallenge {
-        let mut tags = vec![p(matchmaker, "matchmaker"), p(arbiter, "arbiter")];
+        let mut tags = vec![
+            p(matchmaker, "matchmaker"),
+            p(arbiter, "arbiter"),
+            Tag::parse(["timing_relay", "wss://relay.example.com"]).unwrap(),
+        ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
@@ -350,6 +360,13 @@ mod tests {
             .count();
         assert_eq!(arbiters, 1);
         assert_eq!(timestampers, 0);
+        // The Pairing mirrors the (identical) timing_relay set of the two
+        // entries — the self-timed designation travels with the founding.
+        let relays: Vec<String> = tags_named(&pairing, "timing_relay")
+            .into_iter()
+            .filter_map(|s| s.get(1).cloned())
+            .collect();
+        assert_eq!(relays, vec!["wss://relay.example.com".to_string()]);
     }
 
     #[test]

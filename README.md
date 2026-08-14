@@ -11,10 +11,11 @@ family.
 > relying on it in production.
 
 A player enters a matchmaking pool by publishing a signed **Open Challenge**
-(kind `3418`) that names a matchmaker, an arbiter, and optionally a timestamper
-(absent → the session is self-timed, the default), and carries the session
-terms (game, per-role variant preferences, time control, opponent filter) — but
-no opponent. A designated **matchmaker** pairs two compatible Open
+(kind `3418`) that names a matchmaker, an arbiter, and **exactly one timing
+designation** — a timestamper (attested mode) or one or more `timing_relay`
+relays (self-timed, the default) — and carries the session terms (game,
+per-role variant preferences, time control, opponent filter) — but no
+opponent. A designated **matchmaker** pairs two compatible Open
 Challenges by publishing a **Pairing** (kind `3419`), without any acceptance
 signature from the players: their consent is pre-committed in their Open
 Challenges, and a Pairing is binding only if it respects both.
@@ -37,16 +38,17 @@ kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
   typed, validated value (the event-local semantic constraints, decidable from
   the event alone).
 - **`compatibility`** — `evaluate(a, b, facts)` decides whether two Open
-  Challenges can be paired (common matchmaker/arbiter/timestamper, common game,
-  identical time control, satisfiable variants, and each player satisfying the
-  other's filter), and resolves each player's variant.
+  Challenges can be paired (common matchmaker/arbiter, identical timing
+  designation, common game, identical time control, satisfiable variants, and
+  each player satisfying the other's filter), and resolves each player's
+  variant.
 - **`pairing`** — `PairingBuilder` lays a compatible pair out as an unsigned
   Pairing `EventBuilder` for the matchmaker to sign.
 
 ## Usage
 
 ```rust
-use nostchmaker::compatibility::{evaluate, Compatibility, Facts, PoolPolicy, RatingPool};
+use nostchmaker::compatibility::{evaluate, Compatibility, Facts, RatingPool};
 use nostchmaker::open_challenge::{OpenChallenge, RatingKind};
 use nostr::key::PublicKey;
 use nostchmaker::pairing::PairingBuilder;
@@ -54,20 +56,11 @@ use nostchmaker::pairing::PairingBuilder;
 // The consumer resolves the external facts the filters need, anchored at the
 // Pairing's canonical timing: the contact list as of the anchor, and the most
 // recent attestation by the *pinned* authority (under the pinned kind) with
-// created_at at or before the anchor — in the pool the authority's published
-// pool policy defines. `everyone`-filtered pools need none of this.
+// created_at at or before the anchor — in the pool the filter's declared
+// scope selects (decision M-9). `everyone`-filtered pools need none of this.
 struct MyFacts;
 impl Facts for MyFacts {
     fn follows(&self, _follower: &PublicKey, _target: &PublicKey) -> bool { false }
-    fn pool_policy(
-        &self,
-        _authority: &PublicKey,
-        _kind: RatingKind,
-    ) -> Option<PoolPolicy> {
-        // Fail-closed when the pinned authority's published policy is unknown.
-        // E.g. Sashité's `sanki` authority publishes `Some(PoolPolicy::PerGame)`.
-        None
-    }
     fn rating_within(
         &self,
         _authority: &PublicKey,
@@ -97,17 +90,17 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge) {
 
 `evaluate` encodes the consent constraints of kind `3419` that are decidable
 from the two Open Challenges plus the resolved facts: distinct signers, a common
-matchmaker / arbiter / timestamper, a common game, an identical time control, a
+matchmaker / arbiter, an identical timing designation (the same timestamper, or
+the same `timing_relay` set), a common game, an identical time control, a
 satisfiable variant resolution, and each player satisfying the other's filter. A
 `following` filter binds against the filterer's contact list; a `rating` filter
 binds against the rating authority the filterer **pins** in their Open Challenge
 (an authority pubkey plus the attestation kind, `3426` Elo or `3427` Glicko-2).
-The comparison pool follows the pinned authority's **published pool policy**
-(kind `3419` §Consent constraints): under a per-`(game, variant)` policy (the
-rating specifications' default) the filter is satisfiable only for a
-same-variant pairing; under a per-game policy (e.g. Sashité's `sanki` authority)
-it binds across any variant combination, resolved or free. An unknown policy is
-fail-closed: the pair is not matched.
+The comparison pool follows the filter's **declared pool scope** — its sixth
+element, `pergame` or `pervariant` (decision M-9), so satisfaction is objective
+from public data alone: under `pervariant` the filter is satisfiable only for a
+same-variant pairing; under `pergame` (e.g. Sashité's `sanki` pools) it binds
+across any variant combination, resolved or free.
 
 It is deliberately **silent** on the rest, which a higher layer enforces:
 

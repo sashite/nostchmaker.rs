@@ -10,8 +10,8 @@
 //!
 //! This crate implements the **primitive only**, and is **game-agnostic**: it
 //! parses and validates Open Challenges, decides whether two are compatible —
-//! given externally resolved facts (the follow relation, a rating delta, a
-//! mutual-block status) — resolves each player's variant, and builds the
+//! given externally resolved facts (the follow
+//! relation, a rating comparison) — resolves each player's variant, and builds the
 //! resulting Pairing. It is deliberately silent on transport and storage, and
 //! on *which* game or third parties an application designates; those are a
 //! higher layer's concern (e.g. a matchmaker service).

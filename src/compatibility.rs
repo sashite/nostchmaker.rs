@@ -9,7 +9,7 @@
 //! (constraints 2, 4, 5), a common game (6), an identical time control (8), a
 //! satisfiable variant resolution (7), and each player satisfying the other's
 //! `filter` (9). For the `rating` mode, the comparison pool follows the pinned
-//! authority's published [`PoolPolicy`]: per-(game, variant) — satisfiable only
+//! filter's declared [`PoolScope`]: `pervariant` — satisfiable only
 //! by a same-variant pairing; per-game — binding across any variant
 //! combination.
 //!
@@ -23,31 +23,12 @@
 
 use nostr::key::PublicKey;
 
-use crate::open_challenge::{Filter, OpenChallenge, RatingKind};
-
-/// The pool policy a rating authority publishes for its attestations — how its
-/// ratings are scoped (see the rating specifications §Rating pool).
-///
-/// The `rating` filter's comparison pool follows the **pinned authority's**
-/// published policy (kind `3419` §Consent constraints): pinning a source
-/// implies adopting its pool semantics. The policy determines whether a
-/// `rating` filter can bind a multi-variant or variant-free pairing at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PoolPolicy {
-    /// Ratings live in per-(game, variant) pools — the rating specifications'
-    /// default. A `rating` filter is then satisfiable only by a same-variant
-    /// pairing (a multi-variant session has no shared pool to compare in).
-    PerGameVariant,
-    /// Ratings live in one per-game pool unifying the game's variants (e.g.
-    /// Sashité's `sanki` authority). A `rating` filter then binds across any
-    /// variant combination — resolved, differing, or left free.
-    PerGame,
-}
+use crate::open_challenge::{Filter, OpenChallenge, PoolScope, RatingKind};
 
 /// The pool a rating comparison is performed in, as passed to
 /// [`Facts::rating_within`]. Borrows from the challenges being evaluated, and
-/// is always consistent with the [`PoolPolicy`] the implementer reported for
-/// the pinned source.
+/// is always consistent with the [`PoolScope`] the pinned filter declares
+/// (decision M-9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RatingPool<'a> {
     /// The single per-game pool: the game alone identifies it.
@@ -66,9 +47,8 @@ pub enum RatingPool<'a> {
 
 /// External, relay-derived facts needed to evaluate the `following` and
 /// `rating` filters. A consumer (e.g. a matchmaker service) implements this by
-/// reading NIP-02 contact lists, the pinned rating authorities' published pool
-/// policies, and the suite's rating attestations; the primitive itself performs
-/// no I/O.
+/// reading NIP-02 contact lists and the suite's rating attestations; the
+/// primitive itself performs no I/O.
 ///
 /// The relation queries are **anchored at the Pairing's canonical timing** by
 /// contract (kind `3419` §Consent constraints; [Race Resolution] §Canonical
@@ -83,22 +63,10 @@ pub trait Facts {
     /// Whether `follower` follows `target`, per `follower`'s NIP-02 contact list.
     fn follows(&self, follower: &PublicKey, target: &PublicKey) -> bool;
 
-    /// The pool policy published by `authority` for its `kind` attestations, or
-    /// `None` when the implementer cannot determine it.
-    ///
-    /// The policy is published out of band by the rating authority (see the
-    /// rating specifications §Rating pool); it is a property of the pinned
-    /// source, not of any event. When it is unknown, returning `None` makes
-    /// [`evaluate`] reject the pair
-    /// ([`Incompatibility::UnknownRatingPoolPolicy`], fail-closed) rather than
-    /// guess a pool the authority does not use — a Pairing built on the wrong
-    /// pool would be non-conforming for every verifier that knows the policy.
-    fn pool_policy(&self, authority: &PublicKey, kind: RatingKind) -> Option<PoolPolicy>;
-
     /// Whether `a` and `b` are within `max_delta` rating points in `pool`, as
     /// rated by the pinned `authority` under the pinned `kind`. Both players
     /// are rated in the **same** pool, which [`evaluate`] derives from the
-    /// policy this trait reported for `(authority, kind)`. A player with no
+    /// [`PoolScope`] the pinned filter declares. A player with no
     /// qualifying attestation from `authority` in `pool` is unrated; the
     /// implementer returns `false` (fail-closed).
     fn rating_within(
@@ -142,6 +110,10 @@ pub enum Incompatibility {
     ArbiterMismatch,
     /// The two Open Challenges designate different timestampers.
     TimestamperMismatch,
+    /// The two Open Challenges' `timing_relay` sets differ — the self-timed
+    /// designation must be identical for the Pairing to mirror one set
+    /// (Canonical Timing NIP §Timing modes and mode selection).
+    TimingRelayMismatch,
     /// The two Open Challenges seek different games.
     GameMismatch,
     /// The two Open Challenges declare different time-control configurations.
@@ -150,21 +122,17 @@ pub enum Incompatibility {
     VariantConflict,
     /// A player's `filter` is not satisfied by the other.
     FilterRejected,
-    /// A `rating` filter applies under a **per-(game, variant)** pool policy but
+    /// A `rating` filter applies under a **per-(game, variant)** pool scope but
     /// the relevant variant is unresolved (free), so no pool can be determined;
-    /// the pair is conservatively rejected. (Under a per-game policy this cannot
+    /// the pair is conservatively rejected. (Under a `pergame` scope this cannot
     /// occur: the game pool needs no variant.)
     RatingNeedsResolvedVariant,
-    /// A `rating` filter applies under a **per-(game, variant)** pool policy but
+    /// A `rating` filter applies under a **per-(game, variant)** pool scope but
     /// the two players' resolved variants differ: a multi-variant pairing has no
     /// shared per-variant pool to compare in, so the pair is rejected (kind
-    /// `3419` §Consent constraints). (Under a per-game policy the single game
+    /// `3419` §Consent constraints). (Under a `pergame` scope the single game
     /// pool is shared regardless of the variants.)
     RatingNeedsSameVariant,
-    /// A `rating` filter applies but the pinned authority's pool policy is
-    /// unknown ([`Facts::pool_policy`] returned `None`), so the comparison pool
-    /// cannot be determined; the pair is conservatively rejected (fail-closed).
-    UnknownRatingPoolPolicy,
 }
 
 /// Evaluates whether `a` and `b` can be paired, resolving each player's variant.
@@ -185,6 +153,9 @@ pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Com
     }
     if a.timestamper() != b.timestamper() {
         return Compatibility::Incompatible(Incompatibility::TimestamperMismatch);
+    }
+    if a.timing_relays() != b.timing_relays() {
+        return Compatibility::Incompatible(Incompatibility::TimingRelayMismatch);
     }
     if a.game() != b.game() {
         return Compatibility::Incompatible(Incompatibility::GameMismatch);
@@ -275,18 +246,17 @@ fn satisfies(
             max_delta,
             authority,
             kind,
+            scope,
         } => {
-            // The comparison pool follows the pinned authority's published pool
-            // policy (kind `3419` §Consent constraints): per-game — the single
-            // game pool, whatever the variants; per-(game, variant) — the shared
-            // variant's pool, which requires a same-variant resolution. An
-            // unknown policy is fail-closed.
-            let Some(policy) = facts.pool_policy(&authority, kind) else {
-                return Err(Incompatibility::UnknownRatingPoolPolicy);
-            };
-            let pool = match policy {
-                PoolPolicy::PerGame => RatingPool::PerGame { game },
-                PoolPolicy::PerGameVariant => match (filterer_variant, other_variant) {
+            // The comparison pool is the one the filter's declared scope
+            // selects (kind `3418` §Match-terms tags — decision M-9): `pergame`
+            // — the single game pool, whatever the variants; `pervariant` — the
+            // shared variant's pool, which requires a same-variant resolution.
+            // No out-of-band policy is consulted: the scope is written in the
+            // filter, so every verifier derives the same pool from public data.
+            let pool = match scope {
+                PoolScope::Pergame => RatingPool::PerGame { game },
+                PoolScope::Pervariant => match (filterer_variant, other_variant) {
                     (Some(fv), Some(ov)) if fv != ov => {
                         return Err(Incompatibility::RatingNeedsSameVariant);
                     }
@@ -307,7 +277,7 @@ fn satisfies(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{evaluate, Compatibility, Facts, Incompatibility, PoolPolicy, RatingPool};
+    use super::{evaluate, Compatibility, Facts, Incompatibility, RatingPool};
     use crate::open_challenge::{OpenChallenge, RatingKind};
     use nostr::prelude::*;
 
@@ -323,7 +293,6 @@ mod tests {
         a_follows_b: bool,
         b_follows_a: bool,
         rating_ok: bool,
-        policy: Option<PoolPolicy>,
         expected_pool: Option<(String, Option<String>)>,
     }
 
@@ -335,7 +304,6 @@ mod tests {
                 a_follows_b: false,
                 b_follows_a: false,
                 rating_ok: false,
-                policy: Some(PoolPolicy::PerGameVariant),
                 expected_pool: None,
             }
         }
@@ -350,10 +318,6 @@ mod tests {
             } else {
                 false
             }
-        }
-
-        fn pool_policy(&self, _authority: &PublicKey, _kind: RatingKind) -> Option<PoolPolicy> {
-            self.policy
         }
 
         fn rating_within(
@@ -382,9 +346,22 @@ mod tests {
     }
 
     /// A `rating` filter tag pinning a fresh authority (Glicko-2).
+    fn rating_filter_scoped(max_delta: &str, scope: &str) -> Tag {
+        let authority = Keys::generate().public_key().to_hex();
+        Tag::parse(["filter", "rating", max_delta, &authority, "3427", scope]).unwrap()
+    }
+
     fn rating_filter(max_delta: &str) -> Tag {
         let authority = Keys::generate().public_key().to_hex();
-        Tag::parse(["filter", "rating", max_delta, &authority, "3427"]).unwrap()
+        Tag::parse([
+            "filter",
+            "rating",
+            max_delta,
+            &authority,
+            "3427",
+            "pervariant",
+        ])
+        .unwrap()
     }
 
     fn p(keys: &Keys, role: &str) -> Tag {
@@ -423,7 +400,11 @@ mod tests {
         arbiter: &Keys,
         terms: Vec<Tag>,
     ) -> OpenChallenge {
-        let mut tags = vec![p(matchmaker, "matchmaker"), p(arbiter, "arbiter")];
+        let mut tags = vec![
+            p(matchmaker, "matchmaker"),
+            p(arbiter, "arbiter"),
+            Tag::parse(["timing_relay", "wss://relay.example.com"]).unwrap(),
+        ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
         tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
@@ -832,10 +813,14 @@ mod tests {
             &s.mm,
             &s.arb,
             &s.ts,
-            vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
+            vec![
+                game(),
+                variant("self", "ogi"),
+                tc(),
+                rating_filter_scoped("200", "pergame"),
+            ],
         );
         let mut facts = MockFacts::new(&s.alice, &s.bob);
-        facts.policy = Some(PoolPolicy::PerGame);
         facts.rating_ok = true;
         facts.expected_pool = Some(("sanki".to_string(), None));
         assert_eq!(
@@ -864,10 +849,9 @@ mod tests {
             &s.mm,
             &s.arb,
             &s.ts,
-            vec![game(), tc(), rating_filter("200")],
+            vec![game(), tc(), rating_filter_scoped("200", "pergame")],
         );
         let mut facts = MockFacts::new(&s.alice, &s.bob);
-        facts.policy = Some(PoolPolicy::PerGame);
         facts.rating_ok = true;
         facts.expected_pool = Some(("sanki".to_string(), None));
         assert_eq!(
@@ -880,30 +864,26 @@ mod tests {
     }
 
     #[test]
-    fn rating_filter_fails_closed_on_unknown_pool_policy() {
+    fn a_rating_filter_without_a_scope_does_not_parse() {
+        // The pool scope is the filter's sixth element (decision M-9): a
+        // five-element `rating` filter is the pre-revision wire and no longer
+        // parses, so no pool is ever guessed from out-of-band policy.
         let s = stage();
-        // The implementer cannot determine the pinned authority's pool policy:
-        // the pair is rejected rather than evaluated against a guessed pool.
-        let a = oc(
-            &s.alice,
-            &s.mm,
-            &s.arb,
-            &s.ts,
-            vec![game(), variant("self", "ogi"), tc()],
-        );
-        let b = oc(
-            &s.bob,
-            &s.mm,
-            &s.arb,
-            &s.ts,
-            vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
-        );
-        let mut facts = MockFacts::new(&s.alice, &s.bob);
-        facts.policy = None;
-        facts.rating_ok = true;
-        assert_eq!(
-            evaluate(&a, &b, &facts),
-            Compatibility::Incompatible(Incompatibility::UnknownRatingPoolPolicy)
-        );
+        let authority = Keys::generate().public_key().to_hex();
+        let five = Tag::parse(["filter", "rating", "200", &authority, "3427"]).unwrap();
+        let mut tags = vec![
+            p(&s.mm, "matchmaker"),
+            p(&s.arb, "arbiter"),
+            p(&s.ts, "timestamper"),
+        ];
+        tags.extend(vec![game(), variant("self", "ogi"), tc(), five]);
+        tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
+        tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
+        let event = EventBuilder::new(Kind::Custom(3418), "")
+            .tags(tags)
+            .custom_created_at(Timestamp::from(1000))
+            .finalize(&s.bob)
+            .unwrap();
+        assert!(OpenChallenge::parse(&event).is_err());
     }
 }

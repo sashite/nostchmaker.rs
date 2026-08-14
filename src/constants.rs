@@ -61,5 +61,15 @@ pub const TAG_FILTER: &str = "filter";
 /// `accept_until` tag name.
 pub const TAG_ACCEPT_UNTIL: &str = "accept_until";
 
+/// `timing_relay` tag name: a designated timing relay (self-timed mode, one or
+/// more; Canonical Timing NIP §Timing modes and mode selection).
+pub const TAG_TIMING_RELAY: &str = "timing_relay";
+
+/// `filter` `rating` pool scope: one pool per game, unifying its variants.
+pub const POOL_SCOPE_PERGAME: &str = "pergame";
+
+/// `filter` `rating` pool scope: one pool per (game, variant).
+pub const POOL_SCOPE_PERVARIANT: &str = "pervariant";
+
 /// `nonce` tag name (NIP-13 proof of work).
 pub const TAG_NONCE: &str = "nonce";

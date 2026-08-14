@@ -4,6 +4,29 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-08-11
+
+### Changed
+
+- **BREAKING — in-band timing designation (Canonical Timing NIP, B-2).**
+  `OpenChallenge` now parses and requires **exactly one timing designation**:
+  a `timestamper` `p` tag XOR one or more `["timing_relay", "<wss://…>"]` tags
+  (new constant `TAG_TIMING_RELAY`; accessor `timing_relays()` returning the
+  set). New errors `NoTimingDesignation` / `ConflictingTimingDesignation`;
+  compatibility gains `TimingRelayMismatch` (two entries pair only with
+  identical designations), and `pairing` mirrors the shared designation onto
+  the Pairing it builds.
+- **BREAKING — six-element `rating` filter with a declared pool scope (M-9).**
+  `Filter::Rating` gains `scope: PoolScope` (`pergame` | `pervariant`,
+  constants `POOL_SCOPE_PERGAME`/`POOL_SCOPE_PERVARIANT`): the filter tag is
+  now `["filter", "rating", "<max_delta>", "<authority>", "<kind>",
+  "<scope>"]`, five-element filters no longer parse, and pool compatibility is
+  evaluated per the DECLARED scope. `Facts::pool_policy`, `PoolPolicy`, and
+  `UnknownRatingPoolPolicy` are removed — the scope travels on the wire, not
+  in deployment facts.
+- **BREAKING — `max_delta` bounded to 1–1000 (M-15).** A `rating` filter
+  outside the bound is non-conforming and does not parse.
+
 ## [0.6.0] — 2026-08-10
 
 ### Changed
