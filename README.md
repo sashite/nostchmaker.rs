@@ -11,25 +11,32 @@ family.
 > relying on it in production.
 
 A player enters a matchmaking pool by publishing a signed **Open Challenge**
-(kind `3418`) that names a matchmaker, an arbiter, and **exactly one timing
-designation** — a timestamper (attested mode) or one or more `timing_relay`
-relays (self-timed, the default) — and carries the session terms (game,
-per-role variant preferences, time control, opponent filter) — but no
-opponent. A designated **matchmaker** pairs two compatible Open
-Challenges by publishing a **Pairing** (kind `3419`), without any acceptance
-signature from the players: their consent is pre-committed in their Open
-Challenges, and a Pairing is binding only if it respects both.
+(kind `3418`) that names a matchmaker and **exactly one timing designation** —
+a timestamper (attested mode) or one or more `timing_relay` relays (self-timed,
+the default) — and carries the session terms (game, the `rules` digest of the
+rule-system document, per-role variant preferences, time control, opponent
+filter) — but no opponent. A designated **matchmaker** pairs two compatible
+Open Challenges by publishing a **Pairing** (kind `3419`), without any
+acceptance signature from the players: their consent is pre-committed in their
+Open Challenges, and a Pairing is binding only if it respects both. The Pairing
+also carries what the matchmaker resolves — both players' variants, a drawn
+seat per player, and a founding window — and either player then founds the
+session by publishing a Game Session (kind `3422`). The suite designates no
+arbiter (ADR-0033).
 
 This crate implements the **primitive only**, and is **game-agnostic**: it does
-not know any game's variant vocabulary, performs no I/O, and is silent on *which*
-game or parties an application designates. Those are a higher layer's concern
-(for example a matchmaker service that reads the relay and signs Pairings).
+not know any game's variant vocabulary, performs no I/O, draws no random
+number, and is silent on *which* game, rule-system document or parties an
+application designates. Those are a higher layer's concern (for example a
+matchmaker service that reads the relay, draws the seats, and signs Pairings).
 
 ## Pipeline
 
 ```text
 kind 3418 event ──parse──▶ OpenChallenge ─┐
 kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─▶ Compatible{variants}
+                                                                     │
+                                      Resolution{variants, seat, found_until}
                                                                      │
                                                           PairingBuilder ──▶ kind 3419
 ```
@@ -38,20 +45,21 @@ kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
   typed, validated value (the event-local semantic constraints, decidable from
   the event alone).
 - **`compatibility`** — `evaluate(a, b, facts)` decides whether two Open
-  Challenges can be paired (common matchmaker/arbiter, identical timing
-  designation, common game, identical time control, satisfiable variants, and
-  each player satisfying the other's filter), and resolves each player's
-  variant.
-- **`pairing`** — `PairingBuilder` lays a compatible pair out as an unsigned
-  Pairing `EventBuilder` for the matchmaker to sign.
+  Challenges can be paired (common matchmaker, identical timing designation,
+  common game, identical time control, identical `rules` digest, satisfiable
+  variants, and each player satisfying the other's filter), and resolves each
+  player's variant.
+- **`pairing`** — `PairingBuilder` lays a compatible pair out, under the
+  matchmaker's `Resolution` (both variants, the seat draw, `found_until`), as
+  an unsigned Pairing `EventBuilder` for the matchmaker to sign.
 
 ## Usage
 
 ```rust
 use nostchmaker::compatibility::{evaluate, Compatibility, Facts, RatingPool};
 use nostchmaker::open_challenge::{OpenChallenge, RatingKind};
+use nostchmaker::pairing::{PairingBuilder, Resolution, Seat};
 use nostr::key::PublicKey;
-use nostchmaker::pairing::PairingBuilder;
 
 // The consumer resolves the external facts the filters need, anchored at the
 // Pairing's canonical timing: the contact list as of the anchor, and the most
@@ -72,16 +80,23 @@ impl Facts for MyFacts {
     ) -> bool { false }
 }
 
-// `a` and `b` are two parsed kind-3418 events (OpenChallenge::parse).
-fn pair(a: &OpenChallenge, b: &OpenChallenge) {
+// `a` and `b` are two parsed kind-3418 events (OpenChallenge::parse);
+// `a_first` is the matchmaker's fair coin, `now` its clock.
+fn pair(a: &OpenChallenge, b: &OpenChallenge, a_first: bool, now: u64) {
     if let Compatibility::Compatible { a_variant, b_variant } = evaluate(a, b, &MyFacts) {
-        let mut builder = PairingBuilder::new(a, b);
-        // Multi-variant games (e.g. `sanki`) require a variant per player; fill
-        // any free (None) variant with the matchmaker's choice from the game's
-        // vocabulary.
-        if let Some(v) = a_variant.as_deref() { builder = builder.a_variant(v); }
-        if let Some(v) = b_variant.as_deref() { builder = builder.b_variant(v); }
-        let _pairing = builder.to_event_builder(); // sign with the matchmaker
+        // A variant left free (None) is the matchmaker's choice, from the
+        // vocabulary of the rule-system document both entries name.
+        let a_variant = a_variant.unwrap_or_else(|| "chess".to_string());
+        let b_variant = b_variant.unwrap_or_else(|| "chess".to_string());
+        let resolution = Resolution {
+            a_variant: &a_variant,
+            b_variant: &b_variant,
+            a_seat: if a_first { Seat::First } else { Seat::Second },
+            found_until: now + 120, // the founding window
+        };
+        let _pairing = PairingBuilder::new(a, b, resolution)
+            .rules_hint("https://blobs.example.com")
+            .to_event_builder(); // sign with the matchmaker
     }
 }
 ```
@@ -90,9 +105,11 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge) {
 
 `evaluate` encodes the consent constraints of kind `3419` that are decidable
 from the two Open Challenges plus the resolved facts: distinct signers, a common
-matchmaker / arbiter, an identical timing designation (the same timestamper, or
-the same `timing_relay` set), a common game, an identical time control, a
-satisfiable variant resolution, and each player satisfying the other's filter. A
+matchmaker, an identical timing designation (the same timestamper, or the same
+`timing_relay` set), a common game, an identical time control, an identical
+`rules` digest (the rule-system document is a matching term the matchmaker
+cannot resolve), a satisfiable variant resolution, and each player satisfying
+the other's filter. A
 `following` filter binds against the filterer's contact list; a `rating` filter
 binds against the rating authority the filterer **pins** in their Open Challenge
 (an authority pubkey plus the attestation kind, `3426` Elo or `3427` Glicko-2).

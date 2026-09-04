@@ -13,9 +13,6 @@ pub const MARKER_OPEN_CHALLENGE: &str = "open_challenge";
 /// `p`-tag role marker: the matchmaker authorized to publish the Pairing.
 pub const ROLE_MATCHMAKER: &str = "matchmaker";
 
-/// `p`-tag role marker: the arbiter that ratifies and adjudicates the session.
-pub const ROLE_ARBITER: &str = "arbiter";
-
 /// `p`-tag role marker: the timestamper that provides authoritative timing.
 pub const ROLE_TIMESTAMPER: &str = "timestamper";
 
@@ -73,3 +70,23 @@ pub const POOL_SCOPE_PERVARIANT: &str = "pervariant";
 
 /// `nonce` tag name (NIP-13 proof of work).
 pub const TAG_NONCE: &str = "nonce";
+
+/// `rules` tag name: the rule-system document a session is played under —
+/// its SHA-256 digest and an optional retrieval hint (kind `3420` §Match-terms
+/// tags). A matching term: two Open Challenges pair only if their digests are
+/// equal (kind `3419` §Consent constraints, constraint 9).
+pub const TAG_RULES: &str = "rules";
+
+/// `seat` tag name on a Pairing: each player's seat, drawn by the matchmaker
+/// (kind `3419` §Match-terms tags).
+pub const TAG_SEAT: &str = "seat";
+
+/// `seat` value: the player who moves first.
+pub const SEAT_FIRST: &str = "first";
+
+/// `seat` value: the player who moves second.
+pub const SEAT_SECOND: &str = "second";
+
+/// `found_until` tag name on a Pairing: the latest moment at which a Game
+/// Session founded on it is valid (kind `3419` §Lifecycle tags).
+pub const TAG_FOUND_UNTIL: &str = "found_until";

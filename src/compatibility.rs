@@ -5,19 +5,19 @@
 //!
 //! [`evaluate`] encodes the consent constraints of kind `3419` that are
 //! decidable from the two challenges plus externally resolved [`Facts`]:
-//! distinct signers (constraint 1), a common matchmaker / arbiter / timestamper
-//! (constraints 2, 4, 5), a common game (6), an identical time control (8), a
-//! satisfiable variant resolution (7), and each player satisfying the other's
-//! `filter` (9). For the `rating` mode, the comparison pool follows the pinned
-//! filter's declared [`PoolScope`]: `pervariant` — satisfiable only
-//! by a same-variant pairing; per-game — binding across any variant
-//! combination.
+//! distinct signers (constraint 1), a common matchmaker (2) and timing
+//! designation (5), a common game (6), a satisfiable variant resolution (7), an
+//! identical time control (8), an identical `rules` digest (9), and each player
+//! satisfying the other's `filter` (10). For the `rating` mode, the comparison
+//! pool follows the pinned filter's declared [`PoolScope`]: `pervariant` —
+//! satisfiable only by a same-variant pairing; per-game — binding across any
+//! variant combination.
 //!
 //! It is **silent** on the rest, which a higher layer enforces: the
-//! accept-deadline (constraint 10, a timing decision anchored on the Pairing's
-//! attestation), the Pairing event's own shape (constraints 3, 11, 12, checked
-//! when validating a built Pairing), and any operational policy such as a game
-//! allow-list or NIP-51 mute lists. Constraint 11 (the matchmaker differs from
+//! accept-deadline (constraint 11, a timing decision anchored on the Pairing's
+//! canonical timing), the Pairing event's own shape (constraints 3, 4, 12–15,
+//! fixed when building it), and any operational policy such as a game
+//! allow-list or NIP-51 mute lists. Constraint 12 (the matchmaker differs from
 //! both players) follows from constraint 2 together with kind `3418`'s own
 //! constraint 1, so it is not re-checked here.
 
@@ -106,8 +106,6 @@ pub enum Incompatibility {
     SameSigner,
     /// The two Open Challenges designate different matchmakers.
     MatchmakerMismatch,
-    /// The two Open Challenges designate different arbiters.
-    ArbiterMismatch,
     /// The two Open Challenges designate different timestampers.
     TimestamperMismatch,
     /// The two Open Challenges' `timing_relay` sets differ — the self-timed
@@ -118,6 +116,10 @@ pub enum Incompatibility {
     GameMismatch,
     /// The two Open Challenges declare different time-control configurations.
     TimeControlMismatch,
+    /// The two Open Challenges commit to different rule-system documents
+    /// (`rules` digests) — a matching term the matchmaker cannot resolve (kind
+    /// `3419` §Consent constraints, constraint 9).
+    RulesMismatch,
     /// A player's `self` variant and the other's `opponent` variant disagree.
     VariantConflict,
     /// A player's `filter` is not satisfied by the other.
@@ -141,15 +143,12 @@ pub enum Incompatibility {
 /// [`Compatibility::Compatible`] with the resolved (or free) variants.
 #[must_use]
 pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Compatibility {
-    // Term compatibility (constraints 1, 2, 4, 5, 6, 8).
+    // Term compatibility (constraints 1, 2, 5, 6, 8, 9).
     if a.signer() == b.signer() {
         return Compatibility::Incompatible(Incompatibility::SameSigner);
     }
     if a.matchmaker() != b.matchmaker() {
         return Compatibility::Incompatible(Incompatibility::MatchmakerMismatch);
-    }
-    if a.arbiter() != b.arbiter() {
-        return Compatibility::Incompatible(Incompatibility::ArbiterMismatch);
     }
     if a.timestamper() != b.timestamper() {
         return Compatibility::Incompatible(Incompatibility::TimestamperMismatch);
@@ -163,6 +162,9 @@ pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Com
     if a.time_control() != b.time_control() {
         return Compatibility::Incompatible(Incompatibility::TimeControlMismatch);
     }
+    if a.rules().digest() != b.rules().digest() {
+        return Compatibility::Incompatible(Incompatibility::RulesMismatch);
+    }
 
     // Variant resolution (constraint 7). Each player's variant is constrained by
     // their own `self` preference and the other player's `opponent` preference.
@@ -175,7 +177,7 @@ pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Com
         Err(reason) => return Compatibility::Incompatible(reason),
     };
 
-    // Mutual filter satisfaction (constraint 9): each player satisfies the
+    // Mutual filter satisfaction (constraint 10): each player satisfies the
     // other's filter.
     if let Err(reason) = satisfies(
         b.filter(),
@@ -368,19 +370,27 @@ mod tests {
         Tag::parse(["p", &keys.public_key().to_hex(), "", role]).unwrap()
     }
 
+    const RULES: &str = "3f6d1a0c9e4b2a7d5c8e1f0a9b3c7d2e4f6a8b0c1d3e5f7a9b2c4d6e8f0a1b3c";
+
     /// Builds and parses an Open Challenge from its variable `terms` tags (game,
-    /// variant(s), time_control, filter), with the given authorized parties.
-    fn oc(
+    /// variant(s), time_control, filter), with the given authorized parties and
+    /// the shared `rules` digest.
+    fn oc(signer: &Keys, matchmaker: &Keys, timestamper: &Keys, terms: Vec<Tag>) -> OpenChallenge {
+        oc_under(signer, matchmaker, timestamper, RULES, terms)
+    }
+
+    /// Like [`oc`], under an explicit `rules` digest.
+    fn oc_under(
         signer: &Keys,
         matchmaker: &Keys,
-        arbiter: &Keys,
         timestamper: &Keys,
+        rules: &str,
         terms: Vec<Tag>,
     ) -> OpenChallenge {
         let mut tags = vec![
             p(matchmaker, "matchmaker"),
-            p(arbiter, "arbiter"),
             p(timestamper, "timestamper"),
+            Tag::parse(["rules", rules]).unwrap(),
         ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
@@ -394,16 +404,11 @@ mod tests {
     }
 
     /// Like [`oc`], but designates NO timestamper — a self-timed challenge.
-    fn oc_self_timed(
-        signer: &Keys,
-        matchmaker: &Keys,
-        arbiter: &Keys,
-        terms: Vec<Tag>,
-    ) -> OpenChallenge {
+    fn oc_self_timed(signer: &Keys, matchmaker: &Keys, terms: Vec<Tag>) -> OpenChallenge {
         let mut tags = vec![
             p(matchmaker, "matchmaker"),
-            p(arbiter, "arbiter"),
             Tag::parse(["timing_relay", "wss://relay.example.com"]).unwrap(),
+            Tag::parse(["rules", RULES]).unwrap(),
         ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
@@ -431,7 +436,6 @@ mod tests {
     /// Shared third parties plus two distinct player keys.
     struct Stage {
         mm: Keys,
-        arb: Keys,
         ts: Keys,
         alice: Keys,
         bob: Keys,
@@ -440,7 +444,6 @@ mod tests {
     fn stage() -> Stage {
         Stage {
             mm: Keys::generate(),
-            arb: Keys::generate(),
             ts: Keys::generate(),
             alice: Keys::generate(),
             bob: Keys::generate(),
@@ -453,14 +456,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
@@ -480,14 +481,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "chess"), tc()],
         );
@@ -504,8 +503,8 @@ mod tests {
     #[test]
     fn free_variants_when_unconstrained() {
         let s = stage();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
-        let b = oc(&s.bob, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let b = oc(&s.bob, &s.mm, &s.ts, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
         assert_eq!(
             evaluate(&a, &b, &facts),
@@ -523,11 +522,10 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("opponent", "ogi"), tc()],
         );
-        let b = oc(&s.bob, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let b = oc(&s.bob, &s.mm, &s.ts, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
         // Bob's variant is fixed to `ogi` by Alice's opponent preference; Alice's
         // own variant remains free.
@@ -548,14 +546,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("opponent", "chess"), tc()],
         );
@@ -569,8 +565,8 @@ mod tests {
     #[test]
     fn incompatible_same_signer() {
         let s = stage();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
-        let b = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let b = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.alice);
         assert_eq!(
             evaluate(&a, &b, &facts),
@@ -582,8 +578,8 @@ mod tests {
     fn matchmaker_mismatch() {
         let s = stage();
         let other_mm = Keys::generate();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
-        let b = oc(&s.bob, &other_mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let b = oc(&s.bob, &other_mm, &s.ts, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
         assert_eq!(
             evaluate(&a, &b, &facts),
@@ -592,17 +588,12 @@ mod tests {
     }
 
     #[test]
-    fn arbiter_and_timestamper_mismatch() {
+    fn timestamper_mismatch() {
         let s = stage();
         let other = Keys::generate();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
-        let b_arb = oc(&s.bob, &s.mm, &other, &s.ts, vec![game(), tc()]);
-        let b_ts = oc(&s.bob, &s.mm, &s.arb, &other, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let b_ts = oc(&s.bob, &s.mm, &other, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
-        assert_eq!(
-            evaluate(&a, &b_arb, &facts),
-            Compatibility::Incompatible(Incompatibility::ArbiterMismatch)
-        );
         assert_eq!(
             evaluate(&a, &b_ts, &facts),
             Compatibility::Incompatible(Incompatibility::TimestamperMismatch)
@@ -610,12 +601,55 @@ mod tests {
     }
 
     #[test]
+    fn rules_mismatch() {
+        // The rule-system document is a matching term (constraint 9): two
+        // entries under different digests never pair, whatever their other
+        // terms — and the check comes before the filters, so no relay fact is
+        // consulted for a pair that cannot exist.
+        let s = stage();
+        let other = "0".repeat(64);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let b = oc_under(&s.bob, &s.mm, &s.ts, &other, vec![game(), tc()]);
+        let facts = MockFacts::new(&s.alice, &s.bob);
+        assert_eq!(
+            evaluate(&a, &b, &facts),
+            Compatibility::Incompatible(Incompatibility::RulesMismatch)
+        );
+        assert_eq!(
+            evaluate(&b, &a, &facts),
+            Compatibility::Incompatible(Incompatibility::RulesMismatch)
+        );
+        // Same digest, different hints: the hint is not a matching term.
+        let hinted = {
+            let mut tags = vec![
+                p(&s.mm, "matchmaker"),
+                p(&s.ts, "timestamper"),
+                Tag::parse(["rules", RULES, "https://elsewhere.example"]).unwrap(),
+                game(),
+                tc(),
+            ];
+            tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
+            tags.push(Tag::parse(["nonce", "42", "16"]).unwrap());
+            let event = EventBuilder::new(Kind::Custom(3418), "")
+                .tags(tags)
+                .custom_created_at(Timestamp::from(1000))
+                .finalize(&s.bob)
+                .unwrap();
+            OpenChallenge::parse(&event).unwrap()
+        };
+        assert!(matches!(
+            evaluate(&a, &hinted, &facts),
+            Compatibility::Compatible { .. }
+        ));
+    }
+
+    #[test]
     fn compatible_when_both_self_timed() {
         // Two challenges that both designate no timestamper agree on timing
         // (self-timed) and pair — attestation being a dormant capability.
         let s = stage();
-        let a = oc_self_timed(&s.alice, &s.mm, &s.arb, vec![game(), tc()]);
-        let b = oc_self_timed(&s.bob, &s.mm, &s.arb, vec![game(), tc()]);
+        let a = oc_self_timed(&s.alice, &s.mm, vec![game(), tc()]);
+        let b = oc_self_timed(&s.bob, &s.mm, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
         assert!(matches!(
             evaluate(&a, &b, &facts),
@@ -628,8 +662,8 @@ mod tests {
         // A self-timed challenge and an attested one disagree on timing mode and
         // cannot be paired (Some vs None is a timestamper mismatch).
         let s = stage();
-        let attested = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
-        let self_timed = oc_self_timed(&s.bob, &s.mm, &s.arb, vec![game(), tc()]);
+        let attested = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
+        let self_timed = oc_self_timed(&s.bob, &s.mm, vec![game(), tc()]);
         let facts = MockFacts::new(&s.alice, &s.bob);
         assert_eq!(
             evaluate(&attested, &self_timed, &facts),
@@ -640,11 +674,10 @@ mod tests {
     #[test]
     fn game_mismatch() {
         let s = stage();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![Tag::parse(["game", "chess"]).unwrap(), tc()],
         );
@@ -658,11 +691,10 @@ mod tests {
     #[test]
     fn time_control_mismatch() {
         let s = stage();
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), Tag::parse(["time_control", "180", "2"]).unwrap()],
         );
@@ -680,14 +712,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![
                 game(),
@@ -717,14 +747,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
         );
@@ -751,11 +779,10 @@ mod tests {
         let s = stage();
         // Bob filters by rating and the pinned authority pools per-(game, variant),
         // but Alice's variant is free (unconstrained): no pool can be determined.
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
         );
@@ -776,14 +803,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "chess"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "ogi"), tc(), rating_filter("200")],
         );
@@ -804,14 +829,12 @@ mod tests {
         let a = oc(
             &s.alice,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), variant("self", "chess"), tc()],
         );
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![
                 game(),
@@ -843,11 +866,10 @@ mod tests {
         let s = stage();
         // Under a per-game pool, even fully free variants (the matchmaker's later
         // choice) do not block the rating filter: the game pool needs no variant.
-        let a = oc(&s.alice, &s.mm, &s.arb, &s.ts, vec![game(), tc()]);
+        let a = oc(&s.alice, &s.mm, &s.ts, vec![game(), tc()]);
         let b = oc(
             &s.bob,
             &s.mm,
-            &s.arb,
             &s.ts,
             vec![game(), tc(), rating_filter_scoped("200", "pergame")],
         );
@@ -873,8 +895,8 @@ mod tests {
         let five = Tag::parse(["filter", "rating", "200", &authority, "3427"]).unwrap();
         let mut tags = vec![
             p(&s.mm, "matchmaker"),
-            p(&s.arb, "arbiter"),
             p(&s.ts, "timestamper"),
+            Tag::parse(["rules", RULES]).unwrap(),
         ];
         tags.extend(vec![game(), variant("self", "ogi"), tc(), five]);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());

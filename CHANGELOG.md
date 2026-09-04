@@ -4,6 +4,40 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-09-04
+
+The suite's 2026-09-04 revision ([ADR-0033](https://github.com/sashite/web-specs.md/blob/main/adr/adr-0033-arbiterless-sessions.md)):
+no arbiter, a `rules` term on every founding, seats drawn by the matchmaker,
+a founding window, and either player founding the session.
+
+### Changed
+
+- **BREAKING — no arbiter.** `OpenChallenge` no longer requires, parses or
+  exposes an `arbiter` `p` tag (a stray one is ignored); `ROLE_ARBITER`,
+  `OpenChallenge::arbiter()` and `Incompatibility::ArbiterMismatch` are
+  removed; the Pairing carries no `arbiter` tag (kind `3419` §Consent
+  constraints, constraint 15).
+- **BREAKING — the `rules` term.** `OpenChallenge` requires exactly one
+  `["rules", "<digest>", "<hint>"]` tag (constraint 9): `rules()` returns a
+  `Rules` (`digest()`, `hint()`); new errors `MissingRules`, `MultipleRules`,
+  `InvalidRulesDigest`. Compatibility requires **identical digests** —
+  `Incompatibility::RulesMismatch`, checked before the filters — and the
+  Pairing mirrors the digest with a hint of the matchmaker's choosing
+  (`PairingBuilder::rules_hint`, else the first challenge's).
+- **BREAKING — `PairingBuilder::new(a, b, resolution)`.** What the matchmaker
+  resolves is one value, `pairing::Resolution { a_variant, b_variant, a_seat,
+  found_until }`, so that a Pairing is never built with a term left open: both
+  `variant` tags are unconditional (kind `3419` §Match-terms tags), the two
+  `seat` tags carry the draw (`pairing::Seat`, `b` taking the other seat), and
+  the `found_until` lifecycle tag bounds the founding window. The
+  `a_variant`/`b_variant` setters are gone. The draw itself is the caller's —
+  the crate holds no randomness.
+
+### Added
+
+- Constants `TAG_RULES`, `TAG_SEAT`, `SEAT_FIRST`, `SEAT_SECOND`,
+  `TAG_FOUND_UNTIL`; `pairing::Seat` (`as_str`, `other`, `parse`).
+
 ## [0.7.0] — 2026-08-11
 
 ### Changed

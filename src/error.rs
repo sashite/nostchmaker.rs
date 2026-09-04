@@ -24,8 +24,8 @@ pub enum ParseError {
     WrongKind(u16),
     /// The `content` field is not the empty string.
     NonEmptyContent,
-    /// A required role `p` tag (`matchmaker` or `arbiter`) is absent. Carries the
-    /// role marker. The `timestamper` role is optional (self-timed default) and so
+    /// The required `matchmaker` role `p` tag is absent. Carries the role
+    /// marker. The `timestamper` role is optional (self-timed default) and so
     /// never yields this error.
     MissingRole(&'static str),
     /// A role marker appears on more than one `p` tag. Carries the role marker.
@@ -98,6 +98,13 @@ pub enum ParseError {
     MissingNonce,
     /// More than one `nonce` tag is present. Carries the count.
     MultipleNonces(usize),
+    /// No `rules` tag is present (kind `3418` §Semantic constraints, item 9).
+    MissingRules,
+    /// More than one `rules` tag is present. Carries the count.
+    MultipleRules(usize),
+    /// The `rules` digest (second element) is not 64 lowercase hex digits.
+    /// Carries the offending value.
+    InvalidRulesDigest(String),
 }
 
 impl fmt::Display for ParseError {
@@ -158,6 +165,13 @@ impl fmt::Display for ParseError {
             Self::MissingNonce => f.write_str("missing the required `nonce` tag"),
             Self::MultipleNonces(count) => {
                 write!(f, "expected exactly one `nonce` tag, found {count}")
+            }
+            Self::MissingRules => f.write_str("missing the required `rules` tag"),
+            Self::MultipleRules(count) => {
+                write!(f, "expected exactly one `rules` tag, found {count}")
+            }
+            Self::InvalidRulesDigest(value) => {
+                write!(f, "invalid `rules` digest: {value:?} (expected 64 lowercase hex digits)")
             }
         }
     }

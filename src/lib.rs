@@ -10,11 +10,15 @@
 //!
 //! This crate implements the **primitive only**, and is **game-agnostic**: it
 //! parses and validates Open Challenges, decides whether two are compatible —
-//! given externally resolved facts (the follow
-//! relation, a rating comparison) — resolves each player's variant, and builds the
-//! resulting Pairing. It is deliberately silent on transport and storage, and
-//! on *which* game or third parties an application designates; those are a
-//! higher layer's concern (e.g. a matchmaker service).
+//! given externally resolved facts (the follow relation, a rating comparison)
+//! — resolves each player's variant, and builds the resulting Pairing with
+//! what the matchmaker itself resolves (the variants, the seat draw, the
+//! founding window). It is deliberately silent on transport and storage, on
+//! randomness (the seat draw is the caller's), and on *which* game, rule-system
+//! document or third parties an application designates; those are a higher
+//! layer's concern (e.g. a matchmaker service). The suite designates no
+//! arbiter (ADR-0033): the Pairing binds two players and a timing designation,
+//! and either player founds the session.
 //!
 //! The modules mirror that pipeline:
 //! - [`constants`] — the suite's kind numbers, tag names, and marker strings.

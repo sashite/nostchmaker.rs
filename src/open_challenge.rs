@@ -15,8 +15,8 @@ use nostr::key::PublicKey;
 use crate::constants::{
     FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_ELO_RATING_ATTESTATION,
     KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, POOL_SCOPE_PERGAME,
-    POOL_SCOPE_PERVARIANT, ROLE_ARBITER, ROLE_MATCHMAKER, ROLE_TIMESTAMPER, SELECTOR_OPPONENT,
-    SELECTOR_SELF, TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_TIME_CONTROL,
+    POOL_SCOPE_PERVARIANT, ROLE_MATCHMAKER, ROLE_TIMESTAMPER, SELECTOR_OPPONENT, SELECTOR_SELF,
+    TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_RULES, TAG_TIME_CONTROL,
     TAG_TIMING_RELAY, TAG_VARIANT,
 };
 use crate::error::ParseError;
@@ -100,7 +100,7 @@ pub enum PoolScope {
 /// One period of a time-control configuration.
 ///
 /// Values are validated for shape (per kind `3420` §Match-terms tags) but not
-/// interpreted: time accounting is the arbiter's rule system's concern. Two
+/// interpreted: time accounting is the rule system's concern. Two
 /// configurations are comparable for equality, which is what pairing requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimeControlPeriod {
@@ -129,6 +129,31 @@ impl TimeControlPeriod {
     }
 }
 
+/// The rule-system term of an Open Challenge: the SHA-256 digest of the
+/// rule-system document the signer commits to, with an optional retrieval hint
+/// (kind `3420` §Match-terms tags). The digest is a **matching term** — two
+/// Open Challenges pair only if their digests are equal — and the hint is not:
+/// the Pairing may carry either challenge's, or the matchmaker's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rules {
+    digest: String,
+    hint: Option<String>,
+}
+
+impl Rules {
+    /// The document's SHA-256 digest: 64 lowercase hex digits.
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    /// The retrieval hint (a URL, typically), if the tag carries one.
+    #[must_use]
+    pub fn hint(&self) -> Option<&str> {
+        self.hint.as_deref()
+    }
+}
+
 /// A parsed, structurally valid Open Challenge (kind `3418`).
 ///
 /// Constructed by [`OpenChallenge::parse`]. Per-player variant preferences are
@@ -139,9 +164,9 @@ pub struct OpenChallenge {
     id: EventId,
     signer: PublicKey,
     matchmaker: PublicKey,
-    arbiter: PublicKey,
     timestamper: Option<PublicKey>,
     game: String,
+    rules: Rules,
     self_variant: Option<String>,
     opponent_variant: Option<String>,
     time_control: Vec<TimeControlPeriod>,
@@ -170,12 +195,12 @@ impl OpenChallenge {
         }
 
         // Constraint 1 — authorized third parties (each distinct from the signer).
-        // The matchmaker and arbiter are required; the timestamper is OPTIONAL — absent
-        // → the paired session is self-timed (the default), exactly one → attested mode
+        // The matchmaker is required; the timestamper is OPTIONAL — absent → the
+        // paired session is self-timed (the default), exactly one → attested mode
         // (attestation is a dormant capability). A present-but-malformed or duplicate
-        // timestamper, or one equal to the signer, is still a parse error.
+        // timestamper, or one equal to the signer, is still a parse error. No arbiter
+        // is designated: the suite has none (ADR-0033).
         let matchmaker = role_pubkey(event, ROLE_MATCHMAKER)?;
-        let arbiter = role_pubkey(event, ROLE_ARBITER)?;
         let timestamper = role_pubkey_opt(event, ROLE_TIMESTAMPER)?;
 
         // Constraint 2 — exactly one valid game identifier.
@@ -196,6 +221,9 @@ impl OpenChallenge {
         // Constraint 7 — exactly one nonce tag (difficulty enforced elsewhere).
         require_single_nonce(event)?;
 
+        // Constraint 9 — exactly one `rules` tag carrying a digest.
+        let rules = parse_rules(event)?;
+
         // Timing designation — exactly one of the two forms: a timestamper
         // (attested mode) XOR one or more `timing_relay` tags (self-timed mode;
         // Canonical Timing NIP §Timing modes and mode selection).
@@ -210,9 +238,9 @@ impl OpenChallenge {
             id: event.id,
             signer: event.pubkey,
             matchmaker,
-            arbiter,
             timestamper,
             game,
+            rules,
             self_variant,
             opponent_variant,
             time_control,
@@ -240,12 +268,6 @@ impl OpenChallenge {
         self.matchmaker
     }
 
-    /// The authorized arbiter.
-    #[must_use]
-    pub fn arbiter(&self) -> PublicKey {
-        self.arbiter
-    }
-
     /// The authorized timestamper, or `None` when the challenge designates none
     /// (self-timed mode — the default; attestation is a dormant capability).
     #[must_use]
@@ -257,6 +279,12 @@ impl OpenChallenge {
     #[must_use]
     pub fn game(&self) -> &str {
         &self.game
+    }
+
+    /// The rule-system document the signer commits to (digest, optional hint).
+    #[must_use]
+    pub fn rules(&self) -> &Rules {
+        &self.rules
     }
 
     /// The signer's own variant preference, if fixed.
@@ -553,6 +581,37 @@ fn parse_accept_until(event: &Event) -> Result<u64, ParseError> {
     }
 }
 
+fn parse_rules(event: &Event) -> Result<Rules, ParseError> {
+    let tags: Vec<&Tag> = event
+        .tags
+        .iter()
+        .filter(|tag| first_is(tag, TAG_RULES))
+        .collect();
+    match tags.as_slice() {
+        [] => Err(ParseError::MissingRules),
+        [tag] => {
+            let slice = tag.as_slice();
+            let digest = slice.get(1).map(String::as_str).unwrap_or_default();
+            if !is_digest(digest) {
+                return Err(ParseError::InvalidRulesDigest(digest.to_string()));
+            }
+            let hint = slice.get(2).filter(|s| !s.is_empty()).cloned();
+            Ok(Rules {
+                digest: digest.to_string(),
+                hint,
+            })
+        }
+        _ => Err(ParseError::MultipleRules(tags.len())),
+    }
+}
+
+/// Whether `s` matches `^[0-9a-f]{64}$` (a rule-system document digest).
+fn is_digest(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 fn require_single_nonce(event: &Event) -> Result<(), ParseError> {
     match event
         .tags
@@ -611,7 +670,6 @@ mod tests {
     struct Parties {
         signer: Keys,
         matchmaker: Keys,
-        arbiter: Keys,
         timestamper: Keys,
     }
 
@@ -619,10 +677,11 @@ mod tests {
         Parties {
             signer: Keys::generate(),
             matchmaker: Keys::generate(),
-            arbiter: Keys::generate(),
             timestamper: Keys::generate(),
         }
     }
+
+    const RULES: &str = "3f6d1a0c9e4b2a7d5c8e1f0a9b3c7d2e4f6a8b0c1d3e5f7a9b2c4d6e8f0a1b3c";
 
     fn p(keys: &Keys, role: &str) -> Tag {
         Tag::parse(["p", &keys.public_key().to_hex(), "", role]).unwrap()
@@ -632,9 +691,9 @@ mod tests {
     fn valid_tags(parties: &Parties) -> Vec<Tag> {
         vec![
             p(&parties.matchmaker, "matchmaker"),
-            p(&parties.arbiter, "arbiter"),
             p(&parties.timestamper, "timestamper"),
             Tag::parse(["game", "sanki"]).unwrap(),
+            Tag::parse(["rules", RULES, "https://blobs.example.com"]).unwrap(),
             Tag::parse(["variant", "self", "ogi"]).unwrap(),
             Tag::parse(["variant", "opponent", "ogi"]).unwrap(),
             Tag::parse(["time_control", "300", "3"]).unwrap(),
@@ -672,9 +731,10 @@ mod tests {
 
         assert_eq!(oc.signer(), parties.signer.public_key());
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
-        assert_eq!(oc.arbiter(), parties.arbiter.public_key());
         assert_eq!(oc.timestamper(), Some(parties.timestamper.public_key()));
         assert_eq!(oc.game(), "sanki");
+        assert_eq!(oc.rules().digest(), RULES);
+        assert_eq!(oc.rules().hint(), Some("https://blobs.example.com"));
         assert_eq!(oc.self_variant(), Some("ogi"));
         assert_eq!(oc.opponent_variant(), Some("ogi"));
         assert_eq!(oc.filter(), Filter::Everyone);
@@ -690,7 +750,7 @@ mod tests {
     #[test]
     fn accepts_a_self_timed_challenge_with_no_timestamper() {
         // Attestation is a dormant capability: a challenge that designates no
-        // timestamper is valid and self-timed. The matchmaker/arbiter stay required.
+        // timestamper is valid and self-timed. The matchmaker stays required.
         let parties = parties();
         let mut tags = valid_tags(&parties);
         tags.retain(|t| {
@@ -703,7 +763,6 @@ mod tests {
         assert_eq!(oc.timestamper(), None);
         assert!(oc.timing_relays().contains("wss://relay.example.com"));
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
-        assert_eq!(oc.arbiter(), parties.arbiter.public_key());
     }
 
     #[test]
@@ -867,26 +926,70 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_arbiter() {
+    fn a_stray_arbiter_tag_is_ignored() {
+        // The suite designates no arbiter (ADR-0033): an `arbiter`-marked p tag
+        // is neither read nor rejected on an Open Challenge — it is simply not
+        // one of the roles constraint 1 counts.
         let parties = parties();
         let mut tags = valid_tags(&parties);
         tags.push(p(&Keys::generate(), "arbiter"));
         let event = signed(&parties, "", tags);
+        assert!(OpenChallenge::parse(&event).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_missing_duplicate_or_malformed_rules_tag() {
+        let parties = parties();
+        let is_rules = |t: &Tag| t.as_slice().first().map(String::as_str) == Some("rules");
+
+        let mut missing = valid_tags(&parties);
+        missing.retain(|t| !is_rules(t));
         assert_eq!(
-            OpenChallenge::parse(&event),
-            Err(ParseError::DuplicateRole("arbiter"))
+            OpenChallenge::parse(&signed(&parties, "", missing)),
+            Err(ParseError::MissingRules)
         );
+
+        let mut twice = valid_tags(&parties);
+        twice.push(Tag::parse(["rules", RULES]).unwrap());
+        assert_eq!(
+            OpenChallenge::parse(&signed(&parties, "", twice)),
+            Err(ParseError::MultipleRules(2))
+        );
+
+        for bad in [
+            "".to_string(),
+            RULES[..63].to_string(),
+            format!("{RULES}0"),
+            RULES.to_uppercase(),
+            format!("{}g", &RULES[..63]),
+        ] {
+            let mut tags = valid_tags(&parties);
+            tags.retain(|t| !is_rules(t));
+            tags.push(Tag::parse(["rules", &bad]).unwrap());
+            assert_eq!(
+                OpenChallenge::parse(&signed(&parties, "", tags)),
+                Err(ParseError::InvalidRulesDigest(bad.clone())),
+                "{bad:?}"
+            );
+        }
+
+        // A hint-less tag is fine; an empty hint reads as none.
+        let mut bare = valid_tags(&parties);
+        bare.retain(|t| !is_rules(t));
+        bare.push(Tag::parse(["rules", RULES, ""]).unwrap());
+        let oc = OpenChallenge::parse(&signed(&parties, "", bare)).expect("valid");
+        assert_eq!(oc.rules().digest(), RULES);
+        assert_eq!(oc.rules().hint(), None);
     }
 
     #[test]
     fn rejects_role_equal_to_signer() {
         let parties = parties();
         let mm = parties.matchmaker.public_key().to_hex();
-        let arb = parties.arbiter.public_key().to_hex();
         let signer = parties.signer.public_key().to_hex();
         // The timestamper p tag points at the signer (constraint 1 violation).
         let tags_json = format!(
-            r#"[["p","{mm}","","matchmaker"],["p","{arb}","","arbiter"],["p","{signer}","","timestamper"],["game","sanki"],["variant","self","ogi"],["variant","opponent","ogi"],["time_control","300","3"],["accept_until","2000"],["nonce","42","16"]]"#
+            r#"[["p","{mm}","","matchmaker"],["p","{signer}","","timestamper"],["game","sanki"],["rules","{RULES}"],["variant","self","ogi"],["variant","opponent","ogi"],["time_control","300","3"],["accept_until","2000"],["nonce","42","16"]]"#
         );
         let event = forged_event(&signer, &tags_json);
         assert_eq!(
