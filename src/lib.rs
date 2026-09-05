@@ -14,8 +14,8 @@
 //! — resolves each player's variant, and builds the resulting Pairing with
 //! what the matchmaker itself resolves (the variants, the seat draw, the
 //! founding window). It is deliberately silent on transport and storage, on
-//! randomness (the seat draw is the caller's), and on *which* game, rule-system
-//! document or third parties an application designates; those are a higher
+//! randomness (the seat draw is the caller's), and on *which* game, rule
+//! system or third parties an application designates; those are a higher
 //! layer's concern (e.g. a matchmaker service). The suite designates no
 //! arbiter (ADR-0033): the Pairing binds two players and a timing designation,
 //! and either player founds the session.
@@ -26,9 +26,12 @@
 //! - [`open_challenge`] — parse a kind-`3418` event into a typed Open Challenge.
 //! - [`compatibility`] — decide pairability and resolve each player's variant.
 //! - [`pairing`] — build the kind-`3419` Pairing.
+//! - [`rule_system`] — parse a kind-`3417` Rule System event, the one an Open
+//!   Challenge's `rules` reference names (ADR-0034), for the `game` cross-check.
 
 pub mod compatibility;
 pub mod constants;
 pub mod error;
 pub mod open_challenge;
 pub mod pairing;
+pub mod rule_system;

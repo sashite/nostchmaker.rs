@@ -9,7 +9,7 @@
 //!
 //! The builder assumes the two Open Challenges have already been confirmed
 //! compatible (e.g. via [`crate::compatibility::evaluate`]): it takes the
-//! common game, `rules` digest, timing designation and time control from the
+//! common game, `rules` reference, timing designation and time control from the
 //! **first** Open Challenge, which a conforming pair shares. What the
 //! matchmaker itself **resolves** — both players' variants (the resolved
 //! values from compatibility, any free one filled in by the caller, which
@@ -31,8 +31,8 @@ use nostr::key::PublicKey;
 use nostr::types::RelayUrl;
 
 use crate::constants::{
-    KIND_PAIRING, MARKER_OPEN_CHALLENGE, ROLE_PLAYER, ROLE_TIMESTAMPER, SEAT_FIRST, SEAT_SECOND,
-    TAG_FOUND_UNTIL, TAG_GAME, TAG_RULES, TAG_SEAT, TAG_TIME_CONTROL, TAG_TIMING_RELAY,
+    KIND_PAIRING, MARKER_OPEN_CHALLENGE, MARKER_RULES, ROLE_PLAYER, ROLE_TIMESTAMPER, SEAT_FIRST,
+    SEAT_SECOND, TAG_FOUND_UNTIL, TAG_GAME, TAG_SEAT, TAG_TIME_CONTROL, TAG_TIMING_RELAY,
     TAG_VARIANT,
 };
 use crate::open_challenge::{OpenChallenge, TimeControlPeriod};
@@ -132,7 +132,7 @@ impl<'a> PairingBuilder<'a> {
         self
     }
 
-    /// Sets the retrieval hint of the `rules` tag — the matchmaker's own. When
+    /// Sets the relay hint of the `rules` reference — the matchmaker's own. When
     /// unset, the first Open Challenge's hint is carried, if it has one (kind
     /// `3419` §Match-terms tags: the hint may be either challenge's or the
     /// matchmaker's).
@@ -157,10 +157,10 @@ impl<'a> PairingBuilder<'a> {
             p_tag(self.b.signer(), hint, ROLE_PLAYER),
             // Game (shared by both Open Challenges).
             Tag::custom(TAG_GAME, [self.a.game().to_string()]),
-            // The rule-system document (shared digest; a hint of the
-            // matchmaker's choosing).
+            // The rules reference (the shared Rule System event; a relay hint
+            // of the matchmaker's choosing).
             rules_tag(
-                self.a.rules().digest(),
+                self.a.rules().id(),
                 self.rules_hint.or(self.a.rules().hint()),
             ),
         ];
@@ -172,10 +172,10 @@ impl<'a> PairingBuilder<'a> {
             tags.push(p_tag(timestamper, hint, ROLE_TIMESTAMPER));
         }
         // Self-timed: the Pairing mirrors the (identical — compatibility
-        // rejects a mismatch) `timing_relay` set of the two Open Challenges
-        // (kind `3419` §Consent constraints, constraint 5).
-        for url in self.a.timing_relays() {
-            tags.push(Tag::custom(TAG_TIMING_RELAY, [url.clone()]));
+        // rejects a mismatch) designated timing relay of the two Open
+        // Challenges (kind `3419` §Consent constraints, constraint 5).
+        if let Some(url) = self.a.timing_relay() {
+            tags.push(Tag::custom(TAG_TIMING_RELAY, [url.to_string()]));
         }
 
         // Per-player resolved variants and drawn seats (pubkey-based), both
@@ -218,13 +218,18 @@ fn seat_tag(player: PublicKey, seat: Seat) -> Tag {
     Tag::custom(TAG_SEAT, [player.to_hex(), seat.as_str().to_string()])
 }
 
-/// Builds a `rules` tag `["rules", <digest>]` or `["rules", <digest>, <hint>]`.
-fn rules_tag(digest: &str, hint: Option<&str>) -> Tag {
-    let mut values = vec![digest.to_string()];
-    if let Some(hint) = hint {
-        values.push(hint.to_string());
-    }
-    Tag::custom(TAG_RULES, values)
+/// Builds the rules reference `["e", <rule_system_event_id>, <hint-or-empty>, "rules"]`.
+/// The relay slot is kept present (empty when unset) so the marker stays in
+/// the fourth slot.
+fn rules_tag(rule_system: EventId, hint: Option<&str>) -> Tag {
+    Tag::custom(
+        "e",
+        [
+            rule_system.to_hex(),
+            hint.unwrap_or_default().to_string(),
+            MARKER_RULES.to_string(),
+        ],
+    )
 }
 
 /// Rebuilds a `time_control` tag from a period, omitting trailing fields.
@@ -261,8 +266,8 @@ mod tests {
 
     fn rules(hint: Option<&str>) -> Tag {
         match hint {
-            Some(hint) => Tag::parse(["rules", RULES, hint]).unwrap(),
-            None => Tag::parse(["rules", RULES]).unwrap(),
+            Some(hint) => Tag::parse(["e", RULES, hint, "rules"]).unwrap(),
+            None => Tag::parse(["e", RULES, "", "rules"]).unwrap(),
         }
     }
 
@@ -285,7 +290,7 @@ mod tests {
             vec![
                 p(matchmaker, "matchmaker"),
                 p(timestamper, "timestamper"),
-                rules(Some("https://blobs.example.com")),
+                rules(Some("wss://relay.example.com")),
             ],
             terms,
         )
@@ -319,6 +324,14 @@ mod tests {
     }
 
     /// All slices of tags whose first element equals `name`.
+    /// The `e` tags carrying the `rules` marker.
+    fn rules_refs(event: &Event) -> Vec<Vec<String>> {
+        tags_named(event, "e")
+            .into_iter()
+            .filter(|s| s.get(3).map(String::as_str) == Some("rules"))
+            .collect()
+    }
+
     fn tags_named(event: &Event, name: &str) -> Vec<Vec<String>> {
         event
             .tags
@@ -398,10 +411,10 @@ mod tests {
 
         // game, rules and time_control mirror the Open Challenges.
         assert_eq!(tags_named(&pairing, "game")[0][1], "sanki");
-        let rules = tags_named(&pairing, "rules");
+        let rules = rules_refs(&pairing);
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0][1], RULES);
-        assert_eq!(rules[0][2], "https://blobs.example.com"); // a's hint
+        assert_eq!(rules[0][2], "wss://relay.example.com"); // a's hint
         let tc = &tags_named(&pairing, "time_control")[0];
         assert_eq!(tc[1], "300");
         assert_eq!(tc[2], "3");
@@ -454,17 +467,19 @@ mod tests {
         // ZERO timestamper p tags, zero arbiter.
         assert!(roles(&pairing, "timestamper").is_empty());
         assert!(roles(&pairing, "arbiter").is_empty());
-        // The Pairing mirrors the (identical) timing_relay set of the two
-        // entries — the self-timed designation travels with the founding.
+        // The Pairing mirrors the (identical) designated timing relay of the
+        // two entries — the self-timed designation travels with the founding.
         let relays: Vec<String> = tags_named(&pairing, "timing_relay")
             .into_iter()
             .filter_map(|s| s.get(1).cloned())
             .collect();
         assert_eq!(relays, vec!["wss://relay.example.com".to_string()]);
-        // A hint-less `rules` on both entries yields a hint-less tag.
-        let rules = tags_named(&pairing, "rules");
-        assert_eq!(rules[0].len(), 2);
+        // A hint-less `rules` on both entries yields an empty relay slot, the
+        // marker staying fourth.
+        let rules = rules_refs(&pairing);
+        assert_eq!(rules[0].len(), 4);
         assert_eq!(rules[0][1], RULES);
+        assert_eq!(rules[0][2], "");
         // A single-variant game still writes both variants (unconditional).
         assert_eq!(tags_named(&pairing, "variant").len(), 2);
     }
@@ -485,14 +500,14 @@ mod tests {
         let b = oc(&bob, &mm, &ts, terms());
 
         let pairing = PairingBuilder::new(&a, &b, resolution("ogi", "ogi"))
-            .rules_hint("https://blobs.sanki.app")
+            .rules_hint("wss://relay.sanki.app")
             .to_event_builder()
             .finalize(&mm)
             .unwrap();
 
-        let rules = tags_named(&pairing, "rules");
+        let rules = rules_refs(&pairing);
         assert_eq!(rules[0][1], RULES);
-        assert_eq!(rules[0][2], "https://blobs.sanki.app");
+        assert_eq!(rules[0][2], "wss://relay.sanki.app");
         // A duration-only time control survives the round trip.
         let tc = &tags_named(&pairing, "time_control")[0];
         assert_eq!(tc.len(), 2);

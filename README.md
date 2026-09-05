@@ -12,9 +12,9 @@ family.
 
 A player enters a matchmaking pool by publishing a signed **Open Challenge**
 (kind `3418`) that names a matchmaker and **exactly one timing designation** —
-a timestamper (attested mode) or one or more `timing_relay` relays (self-timed,
-the default) — and carries the session terms (game, the `rules` digest of the
-rule-system document, per-role variant preferences, time control, opponent
+a timestamper (attested mode) or one `timing_relay` (self-timed, the default) —
+and carries the session terms (game, the `rules` reference to a **Rule System**
+event of kind `3417`, per-role variant preferences, time control, opponent
 filter) — but no opponent. A designated **matchmaker** pairs two compatible
 Open Challenges by publishing a **Pairing** (kind `3419`), without any
 acceptance signature from the players: their consent is pre-committed in their
@@ -26,13 +26,16 @@ arbiter (ADR-0033).
 
 This crate implements the **primitive only**, and is **game-agnostic**: it does
 not know any game's variant vocabulary, performs no I/O, draws no random
-number, and is silent on *which* game, rule-system document or parties an
-application designates. Those are a higher layer's concern (for example a
-matchmaker service that reads the relay, draws the seats, and signs Pairings).
+number, never fetches or runs a rule system's module, and is silent on *which*
+game, rule system or parties an application designates. Those are a higher
+layer's concern (for example a matchmaker service that reads the relay,
+resolves the Rule System events, draws the seats, and signs Pairings).
 
 ## Pipeline
 
 ```text
+kind 3417 event ──parse──▶ RuleSystem ───┐
+                                         ▼ check_rule_system (each challenge)
 kind 3418 event ──parse──▶ OpenChallenge ─┐
 kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─▶ Compatible{variants}
                                                                      │
@@ -43,10 +46,14 @@ kind 3418 event ──parse──▶ OpenChallenge ─┴─evaluate(facts)─�
 
 - **`open_challenge`** — `OpenChallenge::parse` turns a kind-`3418` event into a
   typed, validated value (the event-local semantic constraints, decidable from
-  the event alone).
+  the event alone); `check_rule_system` is the cross-event half of the
+  `rules` constraint, once the referenced Rule System event is held.
+- **`rule_system`** — `RuleSystem::parse` turns a kind-`3417` event into a
+  typed value (the module's digest and ABI, the game, the retrieval URLs, the
+  documentary `spec` and `source`), under the NIP's structural constraints.
 - **`compatibility`** — `evaluate(a, b, facts)` decides whether two Open
   Challenges can be paired (common matchmaker, identical timing designation,
-  common game, identical time control, identical `rules` digest, satisfiable
+  common game, identical time control, the same `rules` reference, satisfiable
   variants, and each player satisfying the other's filter), and resolves each
   player's variant.
 - **`pairing`** — `PairingBuilder` lays a compatible pair out, under the
@@ -80,12 +87,15 @@ impl Facts for MyFacts {
     ) -> bool { false }
 }
 
-// `a` and `b` are two parsed kind-3418 events (OpenChallenge::parse);
+// `a` and `b` are two parsed kind-3418 events (OpenChallenge::parse), each
+// already checked against the Rule System event its `rules` reference names
+// (`a.check_rule_system(&rule_system)`, after fetching kind 3417 by id);
 // `a_first` is the matchmaker's fair coin, `now` its clock.
 fn pair(a: &OpenChallenge, b: &OpenChallenge, a_first: bool, now: u64) {
     if let Compatibility::Compatible { a_variant, b_variant } = evaluate(a, b, &MyFacts) {
         // A variant left free (None) is the matchmaker's choice, from the
-        // vocabulary of the rule-system document both entries name.
+        // vocabulary of the rule system both entries name (what its module's
+        // `describe` reports — not this crate's knowledge).
         let a_variant = a_variant.unwrap_or_else(|| "chess".to_string());
         let b_variant = b_variant.unwrap_or_else(|| "chess".to_string());
         let resolution = Resolution {
@@ -95,7 +105,7 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge, a_first: bool, now: u64) {
             found_until: now + 120, // the founding window
         };
         let _pairing = PairingBuilder::new(a, b, resolution)
-            .rules_hint("https://blobs.example.com")
+            .rules_hint("wss://relay.example.com")
             .to_event_builder(); // sign with the matchmaker
     }
 }
@@ -106,10 +116,10 @@ fn pair(a: &OpenChallenge, b: &OpenChallenge, a_first: bool, now: u64) {
 `evaluate` encodes the consent constraints of kind `3419` that are decidable
 from the two Open Challenges plus the resolved facts: distinct signers, a common
 matchmaker, an identical timing designation (the same timestamper, or the same
-`timing_relay` set), a common game, an identical time control, an identical
-`rules` digest (the rule-system document is a matching term the matchmaker
-cannot resolve), a satisfiable variant resolution, and each player satisfying
-the other's filter. A
+`timing_relay`), a common game, an identical time control, the same `rules`
+reference (the rule system is a matching term the matchmaker cannot resolve),
+a satisfiable variant resolution, and each player satisfying the other's
+filter. A
 `following` filter binds against the filterer's contact list; a `rating` filter
 binds against the rating authority the filterer **pins** in their Open Challenge
 (an authority pubkey plus the attestation kind, `3426` Elo or `3427` Glicko-2).
@@ -124,8 +134,12 @@ It is deliberately **silent** on the rest, which a higher layer enforces:
 - the accept-deadline (a timing decision anchored on the Pairing's canonical
   timing — its timestamper attestation in attested mode, its own relay-enforced
   `created_at` in self-timed mode);
+- the resolution of each `rules` reference — fetching the Rule System event
+  by id and checking it (`OpenChallenge::check_rule_system`), and whatever
+  the consumer requires of the module it names (kind `3417`);
 - the Pairing event's own shape (it is built by `PairingBuilder`);
-- any operational policy such as a game allow-list or NIP-51 mute lists.
+- any operational policy such as a game allow-list, a rule-system allow-list
+  or NIP-51 mute lists.
 
 ## Safety and reliability
 

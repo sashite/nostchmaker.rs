@@ -98,13 +98,23 @@ pub enum ParseError {
     MissingNonce,
     /// More than one `nonce` tag is present. Carries the count.
     MultipleNonces(usize),
-    /// No `rules` tag is present (kind `3418` §Semantic constraints, item 9).
+    /// No `rules`-marked `e` tag is present (kind `3418` §Semantic
+    /// constraints, item 9).
     MissingRules,
-    /// More than one `rules` tag is present. Carries the count.
+    /// More than one `rules`-marked `e` tag is present. Carries the count.
     MultipleRules(usize),
-    /// The `rules` digest (second element) is not 64 lowercase hex digits.
-    /// Carries the offending value.
-    InvalidRulesDigest(String),
+    /// The `rules` reference (the `e` tag's second element) is not a
+    /// 64-character lowercase hex event id. Carries the offending value.
+    InvalidRulesReference(String),
+    /// More than one `timing_relay` tag is present: a session designates
+    /// exactly one timing relay (Canonical Timing NIP §Timing modes and mode
+    /// selection). Carries the count.
+    MultipleTimingRelays(usize),
+    /// The `timing_relay` value is not a WebSocket relay URL (kind `3418`
+    /// §Semantic constraints, item 1 — which requires `wss://`; the primitive
+    /// accepts `ws://` too, for development stacks). Carries the offending
+    /// value.
+    InvalidTimingRelay(String),
 }
 
 impl fmt::Display for ParseError {
@@ -166,12 +176,21 @@ impl fmt::Display for ParseError {
             Self::MultipleNonces(count) => {
                 write!(f, "expected exactly one `nonce` tag, found {count}")
             }
-            Self::MissingRules => f.write_str("missing the required `rules` tag"),
+            Self::MissingRules => f.write_str("missing the required `rules`-marked `e` tag"),
             Self::MultipleRules(count) => {
                 write!(f, "expected exactly one `rules` tag, found {count}")
             }
-            Self::InvalidRulesDigest(value) => {
-                write!(f, "invalid `rules` digest: {value:?} (expected 64 lowercase hex digits)")
+            Self::InvalidRulesReference(value) => {
+                write!(
+                    f,
+                    "invalid `rules` reference: {value:?} (expected a 64-character lowercase hex event id)"
+                )
+            }
+            Self::MultipleTimingRelays(count) => {
+                write!(f, "multiple `timing_relay` tags ({count}); a session designates exactly one")
+            }
+            Self::InvalidTimingRelay(value) => {
+                write!(f, "invalid `timing_relay` value: {value:?} (expected a relay URL)")
             }
         }
     }

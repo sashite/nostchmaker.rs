@@ -4,6 +4,55 @@ All notable changes to this crate are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-09-05
+
+The `rules` term becomes an **event reference** ([ADR-0034](https://github.com/sashite/web-specs.md/blob/main/adr/adr-0034-reference-build.md)):
+a session is played under a signed **Rule System** event (kind `3417`) naming
+an executable module, and a session designates **exactly one** timing relay.
+
+### Changed
+
+- **BREAKING — the `rules` reference.** An Open Challenge names its rule
+  system with a `rules`-marked `e` tag, `["e", "<rule_system_event_id>",
+  "<relay_hint>", "rules"]` (kind `3418` §Match-terms tags, constraint 9),
+  no longer a `["rules", "<digest>", "<hint>"]` tag. `Rules::digest()` is
+  replaced by `Rules::id() -> EventId`; `hint()` is now the relay hint;
+  `ParseError::InvalidRulesDigest` becomes `InvalidRulesReference(String)`
+  (a 64-character lowercase hex id is required — an uppercase id is refused
+  even though it would parse); `Incompatibility::RulesMismatch` compares the
+  referenced ids. The Pairing mirrors the reference as the same `e` tag, with
+  `PairingBuilder::rules_hint` (or the first challenge's hint) in the relay
+  slot. The constant `TAG_RULES` is replaced by `MARKER_RULES`.
+- **BREAKING — exactly one timing relay.** A self-timed Open Challenge
+  carries exactly one `timing_relay` tag, and its value must be a WebSocket
+  relay URL (kind `3418` §Semantic constraints, item 1; Canonical Timing NIP
+  §Timing modes and mode selection): `timing_relays() -> &BTreeSet<String>`
+  becomes `timing_relay() -> Option<&str>` (the value kept verbatim, as the
+  Pairing mirrors it), and two new errors, `MultipleTimingRelays(usize)` and
+  `InvalidTimingRelay(String)`, refuse a second tag and a value that is not a
+  relay URL. The NIP requires the `wss://` scheme; the primitive accepts
+  `ws://` as well, so a development stack on a plain local relay keeps
+  pairing — the scheme policy is the deployment's.
+  `Incompatibility::TimingRelayMismatch` compares the single designation.
+
+### Added
+
+- The **`rule_system` module**: `RuleSystem::parse` turns a kind-`3417`
+  event into a typed value (`id`, `publisher`, `game`, `digest`, `abi`,
+  `urls`, `spec`, `source`, `label`) under the NIP's structural
+  constraints — exactly one `game`, `x` and `abi`; a `nonce`; no
+  `expiration`; the documentary `url`, `spec` and `source` tags checked for
+  shape; the content's length and forbidden characters — with
+  `RuleSystemError` naming each violation. The crate does not
+  fetch, run or verify the module: that is the consumer's.
+- **`OpenChallenge::check_rule_system(&RuleSystem)`** — the cross-event half
+  of constraint 9: the event held must be the one the reference names
+  (`RulesError::WrongEvent`) and of the challenge's `game`
+  (`RulesError::GameMismatch`). A matchmaker resolves each challenge's
+  reference before pairing (kind `3418` §Client guidelines).
+- Constants `KIND_RULE_SYSTEM`, `MARKER_RULES`, `TAG_X`, `TAG_ABI`,
+  `TAG_URL`, `TAG_SPEC`, `TAG_SOURCE`, `TAG_EXPIRATION`.
+
 ## [0.8.0] — 2026-09-04
 
 The suite's 2026-09-04 revision ([ADR-0033](https://github.com/sashite/web-specs.md/blob/main/adr/adr-0033-arbiterless-sessions.md)):

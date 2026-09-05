@@ -11,15 +11,17 @@
 
 use nostr::event::{Event, EventId, Kind, Tag};
 use nostr::key::PublicKey;
+use nostr::types::RelayUrl;
 
 use crate::constants::{
     FILTER_EVERYONE, FILTER_FOLLOWING, FILTER_RATING, KIND_ELO_RATING_ATTESTATION,
-    KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, POOL_SCOPE_PERGAME,
+    KIND_GLICKO2_RATING_ATTESTATION, KIND_OPEN_CHALLENGE, MARKER_RULES, POOL_SCOPE_PERGAME,
     POOL_SCOPE_PERVARIANT, ROLE_MATCHMAKER, ROLE_TIMESTAMPER, SELECTOR_OPPONENT, SELECTOR_SELF,
-    TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_RULES, TAG_TIME_CONTROL,
-    TAG_TIMING_RELAY, TAG_VARIANT,
+    TAG_ACCEPT_UNTIL, TAG_FILTER, TAG_GAME, TAG_NONCE, TAG_TIME_CONTROL, TAG_TIMING_RELAY,
+    TAG_VARIANT,
 };
 use crate::error::ParseError;
+use crate::rule_system::{RuleSystem, RulesError};
 
 /// The rating system a `rating` filter pins as its authoritative source.
 ///
@@ -129,25 +131,30 @@ impl TimeControlPeriod {
     }
 }
 
-/// The rule-system term of an Open Challenge: the SHA-256 digest of the
-/// rule-system document the signer commits to, with an optional retrieval hint
-/// (kind `3420` §Match-terms tags). The digest is a **matching term** — two
-/// Open Challenges pair only if their digests are equal — and the hint is not:
+/// The rule-system term of an Open Challenge: the **rules reference** — the id
+/// of the Rule System event (kind `3417`) the signer commits to, with an
+/// optional relay hint, carried as `["e", "<id>", "<relay_hint>", "rules"]`
+/// (kind `3420` §Match-terms tags). The event id is a **matching term** — two
+/// Open Challenges pair only if they name the same event — and the hint is not:
 /// the Pairing may carry either challenge's, or the matchmaker's own.
+///
+/// Whether the referenced event is a conforming Rule System of the challenge's
+/// `game` is cross-event validation the matchmaker performs once it holds the
+/// event ([`OpenChallenge::check_rule_system`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rules {
-    digest: String,
+    id: EventId,
     hint: Option<String>,
 }
 
 impl Rules {
-    /// The document's SHA-256 digest: 64 lowercase hex digits.
+    /// The Rule System event's id.
     #[must_use]
-    pub fn digest(&self) -> &str {
-        &self.digest
+    pub fn id(&self) -> EventId {
+        self.id
     }
 
-    /// The retrieval hint (a URL, typically), if the tag carries one.
+    /// The relay hint, if the tag carries a non-empty one.
     #[must_use]
     pub fn hint(&self) -> Option<&str> {
         self.hint.as_deref()
@@ -172,7 +179,7 @@ pub struct OpenChallenge {
     time_control: Vec<TimeControlPeriod>,
     filter: Filter,
     accept_until: u64,
-    timing_relays: std::collections::BTreeSet<String>,
+    timing_relay: Option<String>,
 }
 
 impl OpenChallenge {
@@ -221,14 +228,16 @@ impl OpenChallenge {
         // Constraint 7 — exactly one nonce tag (difficulty enforced elsewhere).
         require_single_nonce(event)?;
 
-        // Constraint 9 — exactly one `rules` tag carrying a digest.
+        // Constraint 9 — exactly one `rules`-marked `e` tag carrying an event id
+        // (the structural part; the reference is resolved by the matchmaker).
         let rules = parse_rules(event)?;
 
         // Timing designation — exactly one of the two forms: a timestamper
-        // (attested mode) XOR one or more `timing_relay` tags (self-timed mode;
-        // Canonical Timing NIP §Timing modes and mode selection).
-        let timing_relays = parse_timing_relays(event);
-        match (timestamper.is_some(), !timing_relays.is_empty()) {
+        // (attested mode) XOR exactly one `timing_relay` tag (self-timed mode;
+        // Canonical Timing NIP §Timing modes and mode selection — a session
+        // has one timing authority).
+        let timing_relay = parse_timing_relay(event)?;
+        match (timestamper.is_some(), timing_relay.is_some()) {
             (false, false) => return Err(ParseError::NoTimingDesignation),
             (true, true) => return Err(ParseError::ConflictingTimingDesignation),
             _ => {}
@@ -246,8 +255,34 @@ impl OpenChallenge {
             time_control,
             filter,
             accept_until,
-            timing_relays,
+            timing_relay,
         })
+    }
+
+    /// Cross-event validation of the rules reference (kind `3418` §Semantic
+    /// constraints, item 9): the Rule System event the challenge names — held
+    /// and parsed by the caller — MUST be the referenced event and MUST govern
+    /// the challenge's `game`.
+    ///
+    /// # Errors
+    ///
+    /// [`RulesError::WrongEvent`] when `rule_system` is not the event the
+    /// reference names; [`RulesError::GameMismatch`] when its `game` differs
+    /// from the challenge's.
+    pub fn check_rule_system(&self, rule_system: &RuleSystem) -> Result<(), RulesError> {
+        if rule_system.id() != self.rules.id() {
+            return Err(RulesError::WrongEvent {
+                referenced: self.rules.id(),
+                held: rule_system.id(),
+            });
+        }
+        if rule_system.game() != self.game {
+            return Err(RulesError::GameMismatch {
+                challenge: self.game.clone(),
+                rule_system: rule_system.game().to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// The Open Challenge event id.
@@ -311,12 +346,12 @@ impl OpenChallenge {
         self.filter
     }
 
-    /// The designated timing relays (self-timed mode), as a set; empty in
-    /// attested mode. Two Open Challenges are pairable only if their sets are
-    /// identical (kind `3419` §Consent constraints, constraint 5).
+    /// The designated timing relay (self-timed mode); `None` in attested
+    /// mode. Two Open Challenges are pairable only if they designate the same
+    /// relay (kind `3419` §Consent constraints, constraint 5).
     #[must_use]
-    pub fn timing_relays(&self) -> &std::collections::BTreeSet<String> {
-        &self.timing_relays
+    pub fn timing_relay(&self) -> Option<&str> {
+        self.timing_relay.as_deref()
     }
 
     /// The pool-entry deadline (a Unix timestamp in seconds).
@@ -517,22 +552,41 @@ fn filter_from_slice(slice: &[String]) -> Result<Filter, ParseError> {
     }
 }
 
-/// Validates `^[1-9][0-9]{0,3}$` and parses it (1..=9999).
-fn parse_timing_relays(event: &Event) -> std::collections::BTreeSet<String> {
-    event
+/// The designated timing relay: at most one `timing_relay` tag, carrying a
+/// WebSocket relay URL. The value is kept verbatim — the Pairing mirrors it
+/// byte for byte, and two designations are identical only as strings.
+///
+/// Kind `3418` requires the `wss://` scheme; this primitive accepts any relay
+/// URL (`ws://` included) so that a development stack on a plain local relay
+/// keeps pairing, and leaves the scheme policy to the deployment — a production
+/// relay refuses what its own advertisement does not cover.
+fn parse_timing_relay(event: &Event) -> Result<Option<String>, ParseError> {
+    let relays: Vec<String> = event
         .tags
         .iter()
         .filter_map(|tag| {
             let s = tag.as_slice();
             if s.first().map(String::as_str) == Some(TAG_TIMING_RELAY) {
-                s.get(1).cloned()
+                Some(s.get(1).cloned().unwrap_or_default())
             } else {
                 None
             }
         })
-        .collect()
+        .collect();
+    match relays.as_slice() {
+        [] => Ok(None),
+        [relay] => {
+            if RelayUrl::parse(relay).is_ok() {
+                Ok(Some(relay.clone()))
+            } else {
+                Err(ParseError::InvalidTimingRelay(relay.clone()))
+            }
+        }
+        _ => Err(ParseError::MultipleTimingRelays(relays.len())),
+    }
 }
 
+/// Validates `^[1-9][0-9]{0,3}$` and parses it (1..=9999).
 fn parse_max_delta(value: &str) -> Option<u16> {
     let bytes = value.as_bytes();
     let first = bytes.first()?;
@@ -581,32 +635,38 @@ fn parse_accept_until(event: &Event) -> Result<u64, ParseError> {
     }
 }
 
+/// The rules reference: exactly one `e` tag whose fourth element is the
+/// `rules` marker, its second element a 64-character lowercase hex event id,
+/// its third an optional relay hint.
 fn parse_rules(event: &Event) -> Result<Rules, ParseError> {
     let tags: Vec<&Tag> = event
         .tags
         .iter()
-        .filter(|tag| first_is(tag, TAG_RULES))
+        .filter(|tag| {
+            let s = tag.as_slice();
+            s.first().map(String::as_str) == Some("e")
+                && s.get(3).map(String::as_str) == Some(MARKER_RULES)
+        })
         .collect();
     match tags.as_slice() {
         [] => Err(ParseError::MissingRules),
         [tag] => {
             let slice = tag.as_slice();
-            let digest = slice.get(1).map(String::as_str).unwrap_or_default();
-            if !is_digest(digest) {
-                return Err(ParseError::InvalidRulesDigest(digest.to_string()));
+            let raw = slice.get(1).map(String::as_str).unwrap_or_default();
+            if !is_lower_hex64(raw) {
+                return Err(ParseError::InvalidRulesReference(raw.to_string()));
             }
+            let id = EventId::from_hex(raw)
+                .map_err(|_| ParseError::InvalidRulesReference(raw.to_string()))?;
             let hint = slice.get(2).filter(|s| !s.is_empty()).cloned();
-            Ok(Rules {
-                digest: digest.to_string(),
-                hint,
-            })
+            Ok(Rules { id, hint })
         }
         _ => Err(ParseError::MultipleRules(tags.len())),
     }
 }
 
-/// Whether `s` matches `^[0-9a-f]{64}$` (a rule-system document digest).
-fn is_digest(s: &str) -> bool {
+/// Whether `s` matches `^[0-9a-f]{64}$` (an event id or a digest, lowercase).
+pub(crate) fn is_lower_hex64(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -663,6 +723,7 @@ mod tests {
     use super::{Filter, OpenChallenge, PoolScope, RatingKind};
     use crate::constants::KIND_OPEN_CHALLENGE;
     use crate::error::ParseError;
+    use crate::rule_system::RulesError;
     use nostr::prelude::*;
 
     const KIND: u16 = KIND_OPEN_CHALLENGE;
@@ -693,7 +754,7 @@ mod tests {
             p(&parties.matchmaker, "matchmaker"),
             p(&parties.timestamper, "timestamper"),
             Tag::parse(["game", "sanki"]).unwrap(),
-            Tag::parse(["rules", RULES, "https://blobs.example.com"]).unwrap(),
+            Tag::parse(["e", RULES, "wss://relay.example.com", "rules"]).unwrap(),
             Tag::parse(["variant", "self", "ogi"]).unwrap(),
             Tag::parse(["variant", "opponent", "ogi"]).unwrap(),
             Tag::parse(["time_control", "300", "3"]).unwrap(),
@@ -733,8 +794,8 @@ mod tests {
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
         assert_eq!(oc.timestamper(), Some(parties.timestamper.public_key()));
         assert_eq!(oc.game(), "sanki");
-        assert_eq!(oc.rules().digest(), RULES);
-        assert_eq!(oc.rules().hint(), Some("https://blobs.example.com"));
+        assert_eq!(oc.rules().id().to_hex(), RULES);
+        assert_eq!(oc.rules().hint(), Some("wss://relay.example.com"));
         assert_eq!(oc.self_variant(), Some("ogi"));
         assert_eq!(oc.opponent_variant(), Some("ogi"));
         assert_eq!(oc.filter(), Filter::Everyone);
@@ -761,7 +822,7 @@ mod tests {
         let event = signed(&parties, "", tags);
         let oc = OpenChallenge::parse(&event).expect("self-timed challenge is valid");
         assert_eq!(oc.timestamper(), None);
-        assert!(oc.timing_relays().contains("wss://relay.example.com"));
+        assert_eq!(oc.timing_relay(), Some("wss://relay.example.com"));
         assert_eq!(oc.matchmaker(), parties.matchmaker.public_key());
     }
 
@@ -940,7 +1001,7 @@ mod tests {
     #[test]
     fn rejects_a_missing_duplicate_or_malformed_rules_tag() {
         let parties = parties();
-        let is_rules = |t: &Tag| t.as_slice().first().map(String::as_str) == Some("rules");
+        let is_rules = |t: &Tag| t.as_slice().get(3).map(String::as_str) == Some("rules");
 
         let mut missing = valid_tags(&parties);
         missing.retain(|t| !is_rules(t));
@@ -950,7 +1011,7 @@ mod tests {
         );
 
         let mut twice = valid_tags(&parties);
-        twice.push(Tag::parse(["rules", RULES]).unwrap());
+        twice.push(Tag::parse(["e", RULES, "", "rules"]).unwrap());
         assert_eq!(
             OpenChallenge::parse(&signed(&parties, "", twice)),
             Err(ParseError::MultipleRules(2))
@@ -965,21 +1026,118 @@ mod tests {
         ] {
             let mut tags = valid_tags(&parties);
             tags.retain(|t| !is_rules(t));
-            tags.push(Tag::parse(["rules", &bad]).unwrap());
+            tags.push(Tag::parse(["e", &bad, "", "rules"]).unwrap());
             assert_eq!(
                 OpenChallenge::parse(&signed(&parties, "", tags)),
-                Err(ParseError::InvalidRulesDigest(bad.clone())),
+                Err(ParseError::InvalidRulesReference(bad.clone())),
                 "{bad:?}"
             );
         }
 
-        // A hint-less tag is fine; an empty hint reads as none.
+        // An empty relay hint reads as none.
         let mut bare = valid_tags(&parties);
         bare.retain(|t| !is_rules(t));
-        bare.push(Tag::parse(["rules", RULES, ""]).unwrap());
+        bare.push(Tag::parse(["e", RULES, "", "rules"]).unwrap());
         let oc = OpenChallenge::parse(&signed(&parties, "", bare)).expect("valid");
-        assert_eq!(oc.rules().digest(), RULES);
+        assert_eq!(oc.rules().id().to_hex(), RULES);
         assert_eq!(oc.rules().hint(), None);
+
+        // An `e` tag with another marker is not the rules reference.
+        let mut other = valid_tags(&parties);
+        other.retain(|t| !is_rules(t));
+        other.push(Tag::parse(["e", RULES, "", "game_session"]).unwrap());
+        assert_eq!(
+            OpenChallenge::parse(&signed(&parties, "", other)),
+            Err(ParseError::MissingRules)
+        );
+    }
+
+    #[test]
+    fn requires_one_timing_relay_url() {
+        let parties = parties();
+        let self_timed = |relays: &[&str]| {
+            let mut tags = valid_tags(&parties);
+            tags.retain(|t| t.as_slice().get(3).map(String::as_str) != Some("timestamper"));
+            for relay in relays {
+                tags.push(Tag::parse(["timing_relay", relay]).unwrap());
+            }
+            OpenChallenge::parse(&signed(&parties, "", tags))
+        };
+        assert_eq!(
+            self_timed(&["wss://relay.example.com", "wss://other.example.com"]),
+            Err(ParseError::MultipleTimingRelays(2))
+        );
+        for bad in [
+            "",
+            "https://relay.example.com",
+            "relay.example.com",
+            "wss://",
+        ] {
+            assert_eq!(
+                self_timed(&[bad]),
+                Err(ParseError::InvalidTimingRelay(bad.to_string())),
+                "{bad:?}"
+            );
+        }
+        // A plain local relay is accepted: the scheme policy is the deployment's.
+        assert_eq!(
+            self_timed(&["ws://localhost:10547"])
+                .expect("a ws:// relay")
+                .timing_relay(),
+            Some("ws://localhost:10547")
+        );
+        let oc = self_timed(&["wss://relay.example.com/"]).expect("one wss:// relay");
+        assert_eq!(
+            oc.timing_relay(),
+            Some("wss://relay.example.com/"),
+            "kept verbatim"
+        );
+    }
+
+    #[test]
+    fn checks_the_rule_system_against_the_reference() {
+        let parties = parties();
+        let rule_system = |game: &str| {
+            let tags = vec![
+                Tag::parse(["game", game]).unwrap(),
+                Tag::parse(["x", RULES]).unwrap(),
+                Tag::parse(["abi", "sashite.sanki.kernel-abi/1"]).unwrap(),
+                Tag::parse(["nonce", "1", "20"]).unwrap(),
+            ];
+            let event = EventBuilder::new(Kind::Custom(3417), "")
+                .tags(tags)
+                .finalize(&parties.matchmaker)
+                .unwrap();
+            crate::rule_system::RuleSystem::parse(&event).unwrap()
+        };
+        let sanki = rule_system("sanki");
+        let go = rule_system("go");
+        let referencing = |rs: &crate::rule_system::RuleSystem| {
+            let mut tags = valid_tags(&parties);
+            tags.retain(|t| t.as_slice().first().map(String::as_str) != Some("e"));
+            tags.push(Tag::parse(["e", &rs.id().to_hex(), "", "rules"]).unwrap());
+            OpenChallenge::parse(&signed(&parties, "", tags)).expect("valid")
+        };
+
+        // The referenced event, of the challenge's game: accepted.
+        assert_eq!(referencing(&sanki).check_rule_system(&sanki), Ok(()));
+        // The referenced event, but of another game than the challenge's.
+        assert_eq!(
+            referencing(&go).check_rule_system(&go),
+            Err(RulesError::GameMismatch {
+                challenge: "sanki".to_string(),
+                rule_system: "go".to_string()
+            })
+        );
+        // Not the referenced event at all — whatever its game.
+        let oc = referencing(&sanki);
+        assert_eq!(
+            oc.check_rule_system(&go),
+            Err(RulesError::WrongEvent {
+                referenced: sanki.id(),
+                held: go.id()
+            })
+        );
     }
 
     #[test]
@@ -989,7 +1147,7 @@ mod tests {
         let signer = parties.signer.public_key().to_hex();
         // The timestamper p tag points at the signer (constraint 1 violation).
         let tags_json = format!(
-            r#"[["p","{mm}","","matchmaker"],["p","{signer}","","timestamper"],["game","sanki"],["rules","{RULES}"],["variant","self","ogi"],["variant","opponent","ogi"],["time_control","300","3"],["accept_until","2000"],["nonce","42","16"]]"#
+            r#"[["p","{mm}","","matchmaker"],["p","{signer}","","timestamper"],["game","sanki"],["e","{RULES}","","rules"],["variant","self","ogi"],["variant","opponent","ogi"],["time_control","300","3"],["accept_until","2000"],["nonce","42","16"]]"#
         );
         let event = forged_event(&signer, &tags_json);
         assert_eq!(

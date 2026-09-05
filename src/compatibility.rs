@@ -7,7 +7,7 @@
 //! decidable from the two challenges plus externally resolved [`Facts`]:
 //! distinct signers (constraint 1), a common matchmaker (2) and timing
 //! designation (5), a common game (6), a satisfiable variant resolution (7), an
-//! identical time control (8), an identical `rules` digest (9), and each player
+//! identical time control (8), an identical `rules` reference (9), and each player
 //! satisfying the other's `filter` (10). For the `rating` mode, the comparison
 //! pool follows the pinned filter's declared [`PoolScope`]: `pervariant` —
 //! satisfiable only by a same-variant pairing; per-game — binding across any
@@ -108,17 +108,18 @@ pub enum Incompatibility {
     MatchmakerMismatch,
     /// The two Open Challenges designate different timestampers.
     TimestamperMismatch,
-    /// The two Open Challenges' `timing_relay` sets differ — the self-timed
-    /// designation must be identical for the Pairing to mirror one set
+    /// The two Open Challenges designate different timing relays — the
+    /// self-timed designation must be identical for the Pairing to mirror it
     /// (Canonical Timing NIP §Timing modes and mode selection).
     TimingRelayMismatch,
     /// The two Open Challenges seek different games.
     GameMismatch,
     /// The two Open Challenges declare different time-control configurations.
     TimeControlMismatch,
-    /// The two Open Challenges commit to different rule-system documents
-    /// (`rules` digests) — a matching term the matchmaker cannot resolve (kind
-    /// `3419` §Consent constraints, constraint 9).
+    /// The two Open Challenges commit to different rule systems (their
+    /// `rules` references name different Rule System events) — a matching
+    /// term the matchmaker cannot resolve (kind `3419` §Consent constraints,
+    /// constraint 9).
     RulesMismatch,
     /// A player's `self` variant and the other's `opponent` variant disagree.
     VariantConflict,
@@ -153,7 +154,7 @@ pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Com
     if a.timestamper() != b.timestamper() {
         return Compatibility::Incompatible(Incompatibility::TimestamperMismatch);
     }
-    if a.timing_relays() != b.timing_relays() {
+    if a.timing_relay() != b.timing_relay() {
         return Compatibility::Incompatible(Incompatibility::TimingRelayMismatch);
     }
     if a.game() != b.game() {
@@ -162,7 +163,7 @@ pub fn evaluate(a: &OpenChallenge, b: &OpenChallenge, facts: &impl Facts) -> Com
     if a.time_control() != b.time_control() {
         return Compatibility::Incompatible(Incompatibility::TimeControlMismatch);
     }
-    if a.rules().digest() != b.rules().digest() {
+    if a.rules().id() != b.rules().id() {
         return Compatibility::Incompatible(Incompatibility::RulesMismatch);
     }
 
@@ -390,7 +391,7 @@ mod tests {
         let mut tags = vec![
             p(matchmaker, "matchmaker"),
             p(timestamper, "timestamper"),
-            Tag::parse(["rules", rules]).unwrap(),
+            Tag::parse(["e", rules, "", "rules"]).unwrap(),
         ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
@@ -408,7 +409,7 @@ mod tests {
         let mut tags = vec![
             p(matchmaker, "matchmaker"),
             Tag::parse(["timing_relay", "wss://relay.example.com"]).unwrap(),
-            Tag::parse(["rules", RULES]).unwrap(),
+            Tag::parse(["e", RULES, "", "rules"]).unwrap(),
         ];
         tags.extend(terms);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());
@@ -624,7 +625,7 @@ mod tests {
             let mut tags = vec![
                 p(&s.mm, "matchmaker"),
                 p(&s.ts, "timestamper"),
-                Tag::parse(["rules", RULES, "https://elsewhere.example"]).unwrap(),
+                Tag::parse(["e", RULES, "wss://elsewhere.example", "rules"]).unwrap(),
                 game(),
                 tc(),
             ];
@@ -896,7 +897,7 @@ mod tests {
         let mut tags = vec![
             p(&s.mm, "matchmaker"),
             p(&s.ts, "timestamper"),
-            Tag::parse(["rules", RULES]).unwrap(),
+            Tag::parse(["e", RULES, "", "rules"]).unwrap(),
         ];
         tags.extend(vec![game(), variant("self", "ogi"), tc(), five]);
         tags.push(Tag::parse(["accept_until", "2000"]).unwrap());

@@ -58,8 +58,9 @@ pub const TAG_FILTER: &str = "filter";
 /// `accept_until` tag name.
 pub const TAG_ACCEPT_UNTIL: &str = "accept_until";
 
-/// `timing_relay` tag name: a designated timing relay (self-timed mode, one or
-/// more; Canonical Timing NIP §Timing modes and mode selection).
+/// `timing_relay` tag name: the designated timing relay (self-timed mode,
+/// exactly one — a session has one timing authority; Canonical Timing NIP
+/// §Timing modes and mode selection).
 pub const TAG_TIMING_RELAY: &str = "timing_relay";
 
 /// `filter` `rating` pool scope: one pool per game, unifying its variants.
@@ -71,11 +72,36 @@ pub const POOL_SCOPE_PERVARIANT: &str = "pervariant";
 /// `nonce` tag name (NIP-13 proof of work).
 pub const TAG_NONCE: &str = "nonce";
 
-/// `rules` tag name: the rule-system document a session is played under —
-/// its SHA-256 digest and an optional retrieval hint (kind `3420` §Match-terms
-/// tags). A matching term: two Open Challenges pair only if their digests are
-/// equal (kind `3419` §Consent constraints, constraint 9).
-pub const TAG_RULES: &str = "rules";
+/// `e`-tag marker of the **rules** reference: the Rule System event (kind
+/// `3417`) a session is played under — `["e", "<rule_system_event_id>",
+/// "<relay_hint>", "rules"]` (kind `3420` §Match-terms tags). A matching term:
+/// two Open Challenges pair only if they name the same event (kind `3419`
+/// §Consent constraints, constraint 9); the relay hint is not a term.
+pub const MARKER_RULES: &str = "rules";
+
+/// Kind of a Rule System event — a signed event naming, by digest, the
+/// executable module a session's rules are (ADR-0034).
+pub const KIND_RULE_SYSTEM: u16 = 3417;
+
+/// `x` tag name on a Rule System event: the SHA-256 digest of the module.
+pub const TAG_X: &str = "x";
+
+/// `abi` tag name on a Rule System event: the interface the module implements.
+pub const TAG_ABI: &str = "abi";
+
+/// `url` tag name on a Rule System event: a retrieval hint for the module.
+pub const TAG_URL: &str = "url";
+
+/// `spec` tag name on a Rule System event: the specification the module was
+/// built to (documentary).
+pub const TAG_SPEC: &str = "spec";
+
+/// `source` tag name on a Rule System event: the sources and commit the module
+/// reproduces from (documentary).
+pub const TAG_SOURCE: &str = "source";
+
+/// `expiration` tag name (NIP-40) — forbidden on a Rule System event.
+pub const TAG_EXPIRATION: &str = "expiration";
 
 /// `seat` tag name on a Pairing: each player's seat, drawn by the matchmaker
 /// (kind `3419` §Match-terms tags).
