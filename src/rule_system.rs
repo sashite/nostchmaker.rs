@@ -379,7 +379,7 @@ mod tests {
             Tag::parse(["spec", SPEC, "https://sashite.dev/rules/sanki/kernel/"]).unwrap(),
             Tag::parse([
                 "source",
-                "https://github.com/sashite/sashite-sanki-kernel-wasm.rs",
+                "https://github.com/sashite/sanki-kernel-wasm.rs",
                 "0123456789abcdef0123456789abcdef01234567",
             ])
             .unwrap(),
